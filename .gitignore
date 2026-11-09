@@ -1,0 +1,12 @@
+db.conf
+server.exe
+__pycache__/
+.claude/settings.local.json
+ServerSync/
+docs/*.pdf
+# local-only files
+libmysql.dll
+/admin.txt
+/c.txt
+/race.txt
+old/
