@@ -1,7 +1,7 @@
 // common.h - shared settings, structs aur function declarations (saare modules yahi use karte hain)
 // Owner: Shoyam20
 #pragma once
-#include <winsock2.h>   // SOCKET type ke liye; windows.h se pehle aana chahiye
+#include "platform.h"   // SOCKET type aur Windows/Linux ka farq (winsock2.h ya POSIX sockets)
 #include <string>
 #include <map>
 #include <vector>

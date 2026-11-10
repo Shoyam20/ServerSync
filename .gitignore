@@ -10,3 +10,7 @@ libmysql.dll
 /c.txt
 /race.txt
 old/
+
+# Linux build output + cloud DB certificate
+/server
+*.pem

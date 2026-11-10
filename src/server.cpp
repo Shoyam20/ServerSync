@@ -1,12 +1,13 @@
-// server.cpp - Winsock socket code: accept loop, recv/send, request parsing, static files (/static/...)
+// server.cpp - socket code (Windows: Winsock, Linux: POSIX, farq platform.h me): accept loop, recv/send, request parsing, static files (/static/...)
 // Owner: Aradhana
-#include <winsock2.h>   // windows.h se pehle aana chahiye
-#include <windows.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include "common.h"
+#ifndef _WIN32
+#include <csignal>
+#endif
 using namespace std;
 
 // global socket, taaki Ctrl+C handler isse band kar sake
@@ -17,15 +18,25 @@ static void closeServerSocket() {
     if (server != INVALID_SOCKET) {
         SOCKET s = server;
         server = INVALID_SOCKET;
-        closesocket(s);   // Windows me close() nahi, closesocket() hota hai
+#ifndef _WIN32
+        shutdown(s, SHUT_RDWR);   // Linux: sirf close() se dusre thread ka ruka hua accept() nahi jaagta, shutdown se jaagta hai
+#endif
+        close_socket(s);
     }
 }
 
 // Ctrl+C aane par socket band karo, accept() fail hoga aur loop khatam
+#ifdef _WIN32
 static BOOL WINAPI onCtrlC(DWORD) {
     closeServerSocket();
     return TRUE;
 }
+#else
+// Linux: Ctrl+C = SIGINT, Render/Docker band karte waqt SIGTERM bhejta hai. shutdown()/close() signal handler me safe hain
+static void onSignal(int) {
+    closeServerSocket();
+}
+#endif
 
 // "123" jaise text ko number me badlo; galat ho to false
 static bool to_number(const string& s, size_t& num) {
@@ -180,8 +191,9 @@ static int recv_more(SOCKET client, string& data) {
     char buf[4096];
     int n = recv(client, buf, sizeof(buf), 0);   // SO_RCVTIMEO ki wajah se zyada der nahi ruka rahega
     if (n == SOCKET_ERROR) {
-        if (WSAGetLastError() == WSAETIMEDOUT) return 408;
-        log_msg("recv failed: " + to_string(WSAGetLastError()));
+        int err = sock_error();
+        if (sock_timed_out(err)) return 408;
+        log_msg("recv failed: " + to_string(err));
         return READ_GONE;
     }
     if (n == 0) return READ_GONE;                // client ne connection band kar diya
@@ -249,7 +261,7 @@ static void sendAll(SOCKET client, const string& res) {
     while (sent < res.size()) {
         int n = send(client, res.c_str() + sent, (int)(res.size() - sent), 0);
         if (n == SOCKET_ERROR) {
-            log_msg("send failed: " + to_string(WSAGetLastError()));
+            log_msg("send failed: " + to_string(sock_error()));
             break;
         }
         sent += n;
@@ -389,55 +401,65 @@ RequestInfo handleClient(const ClientJob& job) {
     } else {
         log_msg_verbose("client left early");   // client chala gaya, reply bhejne ka fayda nahi (status 0 = log nahi)
     }
-    closesocket(client);   // is client ka connection band
+    close_socket(client);   // is client ka connection band
     return info;
 }
 
 bool startServer() {
+#ifdef _WIN32
     SetConsoleCtrlHandler(onCtrlC, TRUE);
+#else
+    // SIGPIPE: band ho chuke client ko send() karne par Linux poora process maar deta hai. Ignore karo, send() bas error dega
+    signal(SIGPIPE, SIG_IGN);
+    // sa_flags = 0 (SA_RESTART nahi): signal aane par ruka hua accept() EINTR ke saath laut aata hai
+    struct sigaction sa = {};
+    sa.sa_handler = onSignal;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+#endif
     load_static_files(STATIC_DIR);      // workers shuru hone se pehle: baad me map sirf padhi jaati hai (mutex nahi chahiye)
 
-    // WSAStartup: koi bhi socket call se pehle zaroori, version 2.2 maango
-    WSADATA wsa;
-    int r = WSAStartup(MAKEWORD(2, 2), &wsa);
-    if (r != 0) {
-        log_msg("WSAStartup failed: " + to_string(r));
+    // Windows: WSAStartup (koi bhi socket call se pehle zaroori). Linux: kuch nahi
+    if (!net_init()) {
+        log_msg("network init (WSAStartup) failed");
         return false;
     }
 
     // socket: OS se endpoint maango (AF_INET = IPv4, SOCK_STREAM = TCP)
     server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server == INVALID_SOCKET) {
-        log_msg("socket failed: " + to_string(WSAGetLastError()));
-        WSACleanup();
+        log_msg("socket failed: " + to_string(sock_error()));
+        net_cleanup();
         return false;
     }
 
     // SO_REUSEADDR: restart par port turant dobara use ho sake
-    BOOL yes = TRUE;
+    int yes = 1;
     setsockopt(server, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
     // bind: socket ko port se jodo (INADDR_ANY = saare network cards, htons = network byte order)
     sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(PORT);
-    if (bind(server, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        log_msg("bind failed: " + to_string(WSAGetLastError()));
+    int port = listen_port(PORT);       // env var PORT (Render set karta hai), warna common.h ka PORT
+    addr.sin_port = htons(port);
+    if (::bind(server, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        log_msg("bind failed on port " + to_string(port) + ": " + to_string(sock_error()));
         closeServerSocket();
-        WSACleanup();
+        net_cleanup();
         return false;
     }
 
     // listen: socket ko "connections ka wait" mode me daalo (backlog queue OS rakhta hai)
     if (listen(server, SOMAXCONN) == SOCKET_ERROR) {
-        log_msg("listen failed: " + to_string(WSAGetLastError()));
+        log_msg("listen failed: " + to_string(sock_error()));
         closeServerSocket();
-        WSACleanup();
+        net_cleanup();
         return false;
     }
 
-    log_msg("Listening on http://localhost:" + to_string(PORT));
+    log_msg("Listening on http://localhost:" + to_string(port));
     return true;
 }
 
@@ -446,31 +468,29 @@ static void reject_client(SOCKET client) {
     send_response(client, 503, "text/html; charset=utf-8", render_error_page("Server busy, try again"),
                   "Retry-After: 2\r\n");
 
-    // unread request ke saath closesocket karne par Windows RST bhejta hai aur client ka 503 kho sakta hai
+    // unread request ke saath socket band karne par OS (Windows aur Linux dono) RST bhejta hai aur client ka 503 kho sakta hai
     // isliye pehle FIN bhejo, request ek baar padh lo (sirf 100 ms tak ruko), phir band karo
-    shutdown(client, SD_SEND);
-    DWORD ms = 100;
-    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+    shutdown(client, SHUT_SEND);
+    set_recv_timeout(client, 100);
     char buf[4096];
     recv(client, buf, sizeof(buf), 0);
-    closesocket(client);
+    close_socket(client);
 }
 
 void runServer() {
     while (true) {
         // accept: client aane tak ruko, phir us client ka naya socket milta hai (aur uska address)
         sockaddr_in from = {};
-        int from_len = sizeof(from);
+        sock_len_t from_len = sizeof(from);
         SOCKET client = accept(server, (sockaddr*)&from, &from_len);
         long long accepted = now_us();             // accept hote hi time note: queue_wait_ms / latency_ms yahin se
         if (client == INVALID_SOCKET) {
             if (server == INVALID_SOCKET) break;   // Ctrl+C se band hua, nikal jao
-            log_msg("accept failed: " + to_string(WSAGetLastError()));
+            log_msg("accept failed: " + to_string(sock_error()));
             continue;
         }
-        // slow client poora server na roke, isliye recv par timeout (Windows me DWORD, milliseconds)
-        DWORD ms = RECV_TIMEOUT_MS;
-        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+        // slow client poora server na roke, isliye recv par timeout (platform.h: Windows DWORD ms, Linux timeval)
+        set_recv_timeout(client, RECV_TIMEOUT_MS);
 
         // client ka IPv4 "a.b.c.d" (network byte order me 4 bytes). /metrics sirf 127.0.0.1 ke liye hai
         const unsigned char* b = (const unsigned char*)&from.sin_addr;
@@ -489,6 +509,6 @@ void runServer() {
 
 void stopServer() {
     closeServerSocket();
-    // WSACleanup: WSAStartup ka jodi, Winsock ka kaam khatam
-    WSACleanup();
+    // Windows: WSACleanup (WSAStartup ka jodi). Linux: kuch nahi
+    net_cleanup();
 }

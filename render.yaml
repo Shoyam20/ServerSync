@@ -1,0 +1,22 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> this repo (branch linux-deploy).
+# Values marked sync: false are asked for in the dashboard when you create the Blueprint; they are never stored in git.
+services:
+  - type: web
+    name: serversync
+    runtime: docker
+    plan: free
+    branch: linux-deploy
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: DB_HOST          # Aiven Overview -> Host
+        sync: false
+      - key: DB_PORT          # Aiven Overview -> Port
+        sync: false
+      - key: DB_USER          # avnadmin, or the service user you created
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_NAME
+        value: ecommerce_db
+      - key: DB_CA_CERT       # optional: paste the whole ca.pem text for certificate checking
+        sync: false
