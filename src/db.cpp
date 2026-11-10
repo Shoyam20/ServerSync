@@ -1,6 +1,6 @@
 // db.cpp - MySQL connection pool: db.conf padhna, get_conn/put_conn, simple query helper
 // Owner: Shoyam20
-#include <winsock2.h>
+#include "platform.h"   // Windows par mysql.h se pehle winsock2.h chahiye
 #include <mysql.h>
 #include <cstring>
 #include <chrono>
@@ -15,6 +15,7 @@ using namespace std;
 
 // ---- login details (db.conf se aate hain, code me nahi likhte) ----
 static string db_host, db_user, db_pass, db_name;
+static string db_ssl_ca;            // CA certificate file (jaise Aiven ka ca.pem). Set ho to SSL zaroori + server cert check
 static unsigned int db_port = 3306;
 
 // ---- pool ----
@@ -33,13 +34,21 @@ static string who() {
     return thread_name();
 }
 
-// db.conf padho: har line "key=value"; # se shuru hone wali line comment hai
+// db.conf padho: har line "key=value"; # se shuru hone wali line comment hai.
+// Kahan dhoondhte hain: env var DB_CONF (agar set hai), warna ./db.conf, warna /etc/secrets/db.conf (Render ki Secret Files)
 static bool load_conf() {
-    ifstream f("db.conf");
+    const char* env_path = getenv("DB_CONF");
+    string path = (env_path != nullptr && *env_path != '\0') ? env_path : "db.conf";
+    ifstream f(path);
+    if (!f && env_path == nullptr) {
+        path = "/etc/secrets/db.conf";
+        f.open(path);
+    }
     if (!f) {
         log_tag("DB", "db.conf not found. Copy db.conf.example to db.conf and fill in your MySQL details.");
         return false;
     }
+    log_tag("DB", "config: " + path);
 
     string line;
     bool has_host = false, has_user = false, has_pass = false, has_name = false;
@@ -56,6 +65,7 @@ static bool load_conf() {
         else if (key == "password") { db_pass = val; has_pass = true; }
         else if (key == "database") { db_name = val; has_name = true; }
         else if (key == "port") db_port = (unsigned int)atoi(val.c_str());
+        else if (key == "ssl_ca") db_ssl_ca = val;
     }
 
     if (!has_host || !has_user || !has_pass || !has_name) {
@@ -79,6 +89,13 @@ static MYSQL* open_conn() {
     unsigned int timeout = 5;                            // server band ho to 5 sec me haar maano
     mysql_options(m, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
     mysql_options(m, MYSQL_SET_CHARSET_NAME, "utf8mb4");
+    // cloud MySQL (Aiven): SSL zaroori. ssl_ca diya hai to VERIFY_CA: connection encrypted + server ka certificate
+    // us CA se signed hona chahiye (warna koi beech me baith kar password padh sakta hai). ssl_ca nahi = purana behaviour
+    if (!db_ssl_ca.empty()) {
+        mysql_options(m, MYSQL_OPT_SSL_CA, db_ssl_ca.c_str());
+        unsigned int ssl_mode = SSL_MODE_VERIFY_CA;
+        mysql_options(m, MYSQL_OPT_SSL_MODE, &ssl_mode);
+    }
 
     if (mysql_real_connect(m, db_host.c_str(), db_user.c_str(), db_pass.c_str(),
                            db_name.c_str(), db_port, nullptr, CLIENT_FOUND_ROWS) == nullptr) {

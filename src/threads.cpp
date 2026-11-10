@@ -1,6 +1,6 @@
 // threads.cpp - client queue, worker threads, logger thread, metrics, mutex + semaphores, thread-safe log
 // Owner: Shoyam20
-#include <winsock2.h>
+#include "platform.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -48,7 +48,7 @@ int thread_id() {
 void log_tag(const string& tag, const string& msg) {
     time_t now = time(nullptr);
     tm t;
-    localtime_s(&t, &now);
+    local_time(&now, &t);
     char tm_buf[16];
     strftime(tm_buf, sizeof(tm_buf), "%H:%M:%S", &t);
 

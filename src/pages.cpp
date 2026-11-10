@@ -1,8 +1,6 @@
 // pages.cpp - routes, sessions (signup/login/logout), templates ka render() aur pages ka data
 // Owner: Ashutosh
-#include <winsock2.h>
-#include <windows.h>
-#include <bcrypt.h>      // BCryptGenRandom: OS ka secure random number generator
+#include "platform.h"    // secure_random (Windows: BCryptGenRandom, Linux: getrandom), sleep_ms, local_time
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -419,10 +417,10 @@ static vector<vector<string>> get_categories(bool allow_db) {
 
 // ---- sessions ----
 
-// 32 random bytes -> 64 hex characters. rand() nahi: wo guess ho sakta hai, BCryptGenRandom nahi
+// 32 random bytes -> 64 hex characters. rand() nahi: wo guess ho sakta hai, OS ka secure RNG nahi
 static bool new_session_id(string& out) {
     unsigned char raw[32];
-    if (BCryptGenRandom(nullptr, raw, sizeof(raw), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return false;
+    if (!secure_random(raw, sizeof(raw))) return false;
     const char* hex = "0123456789abcdef";
     out = "";
     for (int i = 0; i < 32; i++) {
@@ -1550,7 +1548,7 @@ static bool expiry_ok(const string& e) {
     if (mm < 1 || mm > 12) return false;
     time_t now = time(nullptr);
     tm t;
-    localtime_s(&t, &now);
+    local_time(&now, &t);
     int cur = (t.tm_year + 1900) * 12 + t.tm_mon + 1;
     return yy * 12 + mm >= cur;
 }
@@ -2896,7 +2894,7 @@ int route(SOCKET client, Request& req) {
 
     // neeche ke do route sirf testing ke liye
     if (path == "/slow") {
-        Sleep(3000);
+        sleep_ms(3000);
         send_response(client, 200, HTML, render("plain", {{"message", "done"}}), with_cookie_fix(req, ""));
         return 200;
     }
