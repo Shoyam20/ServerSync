@@ -16,6 +16,7 @@ using namespace std;
 // ---- login details (db.conf se aate hain, code me nahi likhte) ----
 static string db_host, db_user, db_pass, db_name;
 static string db_ssl_ca;            // CA certificate file (jaise Aiven ka ca.pem). Set ho to SSL zaroori + server cert check
+static bool db_ssl_required = false; // CA nahi hai par SSL phir bhi zaroori (encrypted, certificate check nahi)
 static unsigned int db_port = 3306;
 
 // ---- pool ----
@@ -36,7 +37,43 @@ static string who() {
 
 // db.conf padho: har line "key=value"; # se shuru hone wali line comment hai.
 // Kahan dhoondhte hain: env var DB_CONF (agar set hai), warna ./db.conf, warna /etc/secrets/db.conf (Render ki Secret Files)
+static string env_or(const char* name, const string& fallback) {
+    const char* v = getenv(name);
+    return (v != nullptr && *v != '\0') ? string(v) : fallback;
+}
+
+// Env vars se config (Render jaise hosts): DB_HOST set ho to db.conf nahi padhte.
+// DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME; DB_CA_CERT = CA certificate ka poora PEM text (optional).
+// Cloud DB hai, isliye SSL hamesha zaroori: CA mila to VERIFY_CA, warna REQUIRED (encrypted, cert check nahi)
+static bool load_env_conf() {
+    db_host = env_or("DB_HOST", "");
+    db_user = env_or("DB_USER", "");
+    db_pass = env_or("DB_PASSWORD", "");
+    db_name = env_or("DB_NAME", "ecommerce_db");
+    db_port = (unsigned int)atoi(env_or("DB_PORT", "3306").c_str());
+    db_ssl_required = true;
+
+    string pem = env_or("DB_CA_CERT", "");
+    if (!pem.empty()) {
+        // MySQL library ko file ka path chahiye, text nahi: PEM ko ek file me likh do
+        const string ca_path = "db_ca_from_env.pem";
+        ofstream out(ca_path, ios::binary | ios::trunc);
+        out << pem;
+        if (pem.back() != '\n') out << '\n';
+        if (out) db_ssl_ca = ca_path;
+        else log_tag("DB", "cannot write " + ca_path + ": using SSL without certificate check");
+    }
+
+    if (db_user.empty() || db_pass.empty()) {
+        log_tag("DB", "DB_HOST is set, so DB_USER and DB_PASSWORD env vars are needed too.");
+        return false;
+    }
+    log_tag("DB", string("config: env vars (SSL ") + (db_ssl_ca.empty() ? "required, CA not checked)" : "with CA check)"));
+    return true;
+}
+
 static bool load_conf() {
+    if (getenv("DB_HOST") != nullptr) return load_env_conf();
     const char* env_path = getenv("DB_CONF");
     string path = (env_path != nullptr && *env_path != '\0') ? env_path : "db.conf";
     ifstream f(path);
@@ -94,6 +131,9 @@ static MYSQL* open_conn() {
     if (!db_ssl_ca.empty()) {
         mysql_options(m, MYSQL_OPT_SSL_CA, db_ssl_ca.c_str());
         unsigned int ssl_mode = SSL_MODE_VERIFY_CA;
+        mysql_options(m, MYSQL_OPT_SSL_MODE, &ssl_mode);
+    } else if (db_ssl_required) {
+        unsigned int ssl_mode = SSL_MODE_REQUIRED;
         mysql_options(m, MYSQL_OPT_SSL_MODE, &ssl_mode);
     }
 
