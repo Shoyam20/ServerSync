@@ -1,8 +1,8 @@
-// pages.cpp - routes, sessions (signup/login/logout), templates ka render() aur pages ka data
+// pages.cpp - routes, sessions (signup/login/logout), template render(), and the data for each page.
 // Owner: Ashutosh
 #include <winsock2.h>
 #include <windows.h>
-#include <bcrypt.h>      // BCryptGenRandom: OS ka secure random number generator
+#include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -13,24 +13,24 @@ using namespace std;
 const string HTML = "text/html; charset=utf-8";
 const string COOKIE_NAME = "session_id";
 
-// Session ka naya expire time (SQL ka tukda): abhi + SESSION_MINUTES.
-// SESSION_MINUTES hamara constant hai, user input nahi, isliye ise SQL me jodna theek hai
+// SQL piece for a session's new expiry: now + SESSION_MINUTES.
+// SESSION_MINUTES is our own constant, not user input, so joining it into the SQL is safe.
 const string EXPIRES_SQL = "NOW() + INTERVAL " + to_string(SESSION_MINUTES) + " MINUTE";
 
-// Rupee ka nishaan (UTF-8 ke 3 bytes). Alag const isliye ki "\xB9" ke baad koi digit likhne par wo hex ka hissa ban jaata hai
+// The rupee sign (3 UTF-8 bytes). A separate const because a digit after "\xB9" would become part of the hex escape.
 const string RUPEE = "\xE2\x82\xB9";
 
-// categories ki list: navbar, home aur products page sab ke liye. id ke order me (Electronics, Accessories, Audio ...)
+// Category list for the navbar, home and products pages, ordered by id.
 const string CATEGORIES_SQL = "SELECT category_id, category_name FROM categories ORDER BY category_id";
 
-// Home page ke "Budget picks": BUDGET_MAX (common.h ka constant, user input nahi) tak ke in-stock products, sasta pehle.
-// Columns wahi jo product_card ko chahiye: id, name, category, price, stock, description
+// Home "Budget picks": in-stock products up to BUDGET_MAX (our constant, not user input), cheapest first.
+// Columns match product_card: id, name, category, price, stock, description.
 const string BUDGET_SQL =
     "SELECT p.product_id, p.name, c.category_name, p.price, p.stock, p.description "
     "FROM products p JOIN categories c ON c.category_id = p.category_id "
     "WHERE p.price <= " + to_string(BUDGET_MAX) + " AND p.stock > 0 AND p.is_active = TRUE ORDER BY p.price, p.product_id LIMIT 10";
 
-// user ka text HTML me daalne se pehle escape karo (warna script chal sakti hai)
+// Escape user text before putting it in HTML (otherwise a script could run).
 static string html_escape(const string& s) {
     string out;
     for (char c : s) {
@@ -44,14 +44,14 @@ static string html_escape(const string& s) {
     return out;
 }
 
-// ---- templates: templates/*.html startup par ek baar memory me, request ke waqt disk nahi padhte ----
+// ---- templates: loaded into memory once at startup, no disk reads per request ----
 
-static map<string, string> templates;           // naam ("layout") -> poora .html text
-static mutex render_problem_lock;               // neeche ki ginti ko bachata hai (workers ek saath render karte hain)
-static int render_problems = 0;                 // kisi template ko koi key nahi mili / template hi nahi mila (tests dekhte hain)
+static map<string, string> templates;           // Name ("layout") -> full .html text.
+static mutex render_problem_lock;               // Protects the counters below (workers render at the same time).
+static int render_problems = 0;                 // Count of missing keys / templates (the tests check it).
 static string render_last_problem;
 
-// jin templates ke bina code chal hi nahi sakta. Inme se koi na mile to server start nahi hota
+// Templates the code cannot work without; if one is missing the server does not start.
 static const char* REQUIRED_TEMPLATES[] = {
     "layout", "nav", "search_form", "search_option", "account_guest", "account_user", "cart_link", "subnav", "subnav_link",
     "flash", "flash_text", "error", "detail_text", "plain", "heading", "empty_state", "meta_refresh",
@@ -71,7 +71,7 @@ static const char* REQUIRED_TEMPLATES[] = {
     "addresses_empty", "address_form", "checkout_address", "checkout_no_address", "checkout_place", "order_address", "admin_products", "admin_product_row", "admin_product_form", "admin_categories", "admin_category_row", "metric_row", "metrics", "test_item", "test", "dbtest",
     "flash_added", "flash_max", "flash_out", "flash_stock", "modals", "scripts"};
 
-// dir ki saari *.html files (naam = file ka naam .html ke bina). Return: zaroori sab mil gaye?
+// Loads every *.html file (name = file name without .html). Returns whether all required ones were found.
 bool load_templates(const string& dir) {
     templates.clear();
     error_code ec;
@@ -80,7 +80,7 @@ bool load_templates(const string& dir) {
             if (!entry.is_regular_file() || entry.path().extension() != ".html") continue;
             ifstream f(entry.path(), ios::binary);
             string text((istreambuf_iterator<char>(f)), istreambuf_iterator<char>());
-            // file ke aakhir ki khali lines hata do: chhote tukde (partials) jodne par extra khali jagah na bane
+            // Remove trailing blank lines so joined partials leave no extra space.
             while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
             templates[entry.path().stem().string()] = text;
         }
@@ -97,11 +97,11 @@ bool load_templates(const string& dir) {
     return ok;
 }
 
-// cache busting: /static/style.css?v={{ver}}. Server start ka time: har naye start par browser nayi css/js maangta hai.
-// Har template me yeh apne aap milta hai (static handler ?query ko ignore karta hai)
+// Cache busting: /static/style.css?v={{ver}} (server start time: a new start makes browsers fetch new css/js).
+// Every template gets it automatically (the static handler ignores the ?query).
 static const string STATIC_VER = to_string((long long)time(nullptr));
 
-// values me key ki value. Na mile to "" aur ek problem note hoti hai (galti pakadne ke liye)
+// Value of a key; if missing it returns "" and records a problem (to catch mistakes).
 static string template_value(const string& tname, const map<string, string>& values, const string& key_text) {
     string key = trim(key_text);
     auto it = values.find(key);
@@ -116,10 +116,8 @@ static string template_value(const string& tname, const map<string, string>& val
     return "";
 }
 
-// Template me do tarah ke nishaan:
-//   {{key}}   -> value HTML-escape hokar (user/DB ka text hamesha isse)
-//   {{{key}}} -> value jaisi hai waisi (sirf wo HTML jo hamne khud banaya, jaise cards ki list)
-// Ek hi baar padhta hai: jo value andar daali gayi usme "{{...}}" ho to wo dobara expand nahi hota
+// Placeholders: {{key}} = HTML-escaped (always for user/DB text), {{{key}}} = raw (only for HTML we built ourselves).
+// One pass only: a "{{...}}" inside an inserted value is not expanded again.
 string render(const string& name, const map<string, string>& values) {
     auto t = templates.find(name);
     if (t == templates.end()) {
@@ -138,7 +136,7 @@ string render(const string& name, const map<string, string>& values) {
         if (src.compare(i, 3, "{{{") == 0) {
             size_t end = src.find("}}}", i + 3);
             if (end != string::npos) {
-                out += template_value(name, values, src.substr(i + 3, end - i - 3));    // raw
+                out += template_value(name, values, src.substr(i + 3, end - i - 3));    // raw.
                 i = end + 3;
                 continue;
             }
@@ -158,15 +156,14 @@ string render(const string& name, const map<string, string>& values) {
 
 // ---- page helpers ----
 
-static string session_cookie(const string& value, int max_age);   // neeche "sessions" section me
-static vector<vector<string>> get_categories(bool allow_db);        // neeche, helpers me
+static string session_cookie(const string& value, int max_age);   // Defined below, in the sessions section.
+static vector<vector<string>> get_categories(bool allow_db);        // Defined below, in the helpers.
 static string category_emoji(const string& name);
 static string rupees(long long cents);
-static map<string, string> pw_parts(bool change_form, const vector<string>* failed);   // neeche, password section me
+static map<string, string> pw_parts(bool change_form, const vector<string>* failed);   // Defined below, in the password section.
 
-// Har reply ke headers me cookie ka kaam (agar reply khud koi Set-Cookie nahi bhej raha, jaise login/logout):
-//  - session expire mila: cookie hatao (Max-Age=0)
-//  - user logged in hai: cookie dobara bhejo, naye Max-Age ke saath (neeche "idle timeout" dekho)
+// Cookie handling for every reply that sets no Set-Cookie itself (e.g. login/logout): an expired session removes the cookie;
+// a logged-in user gets the cookie again with a new Max-Age (see the idle timeout below).
 static string with_cookie_fix(const Request& req, const string& extra) {
     if (extra.find("Set-Cookie") != string::npos) return extra;
     if (req.clear_cookie) return extra + session_cookie("", 0);
@@ -174,12 +171,12 @@ static string with_cookie_fix(const Request& req, const string& extra) {
     return extra;
 }
 
-// navigation bar: login hai to naam + cart badge + Orders + Sessions + Logout, warna Login + Signup
-// (logout POST hai, link nahi: koi dusri site <img src=/logout> se logout na kara sake)
+// Navigation bar: logged in = name, cart badge, Orders, Sessions, Logout; otherwise Login + Signup.
+// Logout is a POST, not a link, so another site cannot log you out with <img src=/logout>.
 static string nav_bar(const Request& req, bool allow_db) {
     vector<vector<string>> cats = get_categories(allow_db);
 
-    // search form: category <select> (ab chuni hui category selected) + text box. GET /products?cat=&q=
+    // Search form: category <select> (the chosen one selected) + text box. GET /products?cat=&q=.
     string cur_cat, cur_q;
     auto c = req.params.find("cat");
     if (c != req.params.end()) cur_cat = c->second;
@@ -193,7 +190,7 @@ static string nav_bar(const Request& req, bool allow_db) {
         links += render("subnav_link", {{"id", cat[0]}, {"emoji", category_emoji(cat[1])}, {"name", cat[1]}});
     }
 
-    // account: guest ko "Sign in / Sign up" (popup kholte hain), logged-in ko naam + Orders + My Sessions + Logout
+    // Account area: guests get Sign in / Sign up (they open the popups), logged-in users get the name and links.
     string account = req.user_id > 0 ? render("account_user", {{"name", req.user_name}, {"admin", req.role == "ADMIN" ? render("admin_nav_link", {}) : ""}})
                                      : render("account_guest", {});
     string cart = render("cart_link", {{"cart_count", to_string(req.cart_count)},
@@ -201,8 +198,8 @@ static string nav_bar(const Request& req, bool allow_db) {
     string subnav = render("subnav", {{"links", links}, {"budget", rupees((long long)BUDGET_MAX * 100)},
                                       {"budget_max", to_string(BUDGET_MAX)}});
 
-    // mobile: ☰ drawer (account links) aur neeche ki tab bar. Desktop par css inhe chhupa deti hai (display: none).
-    // Drawer :target se bhi khulta hai, isliye JavaScript ke bina bhi links milte hain
+    // Mobile: the menu drawer and the bottom tab bar; css hides them on desktop (display: none).
+    // The drawer also opens with :target, so the links work without JavaScript.
     string items = req.user_id > 0 ? render("drawer_user", {{"name", req.user_name}, {"admin", req.role == "ADMIN" ? render("drawer_admin", {}) : ""}})
                                    : render("drawer_guest", {});
     const string& p = req.path;
@@ -217,21 +214,18 @@ static string nav_bar(const Request& req, bool allow_db) {
                           {"drawer", render("drawer", {{"items", items}})}, {"tabbar", tabbar}});
 }
 
-// message ka box (kind = "ok" hara, "err" laal). message_html hamara banaya HTML hona chahiye (user text escape ho chuka)
+// Message box (kind = "ok" green, "err" red). message_html must be HTML we built (user text already escaped).
 static string flash_box(const string& kind, const string& message_html) {
     return render("flash", {{"kind", kind}, {"message", message_html}});
 }
 
-// wahi, par text hai (user/DB ka bhi ho sakta hai): engine ise escape karta hai
+// Same, but from text (may be user/DB text): the engine escapes it.
 static string flash_text(const string& kind, const string& text) {
     return render("flash_text", {{"kind", kind}, {"message", text}});
 }
 
-// poora HTML page: layout.html me title, nav, flash message aur content bharo.
-// head_extra = <head> me extra tag (jaise /metrics ka meta refresh). flash = upar ka message box (ya "")
-// interactive = login/signup popups (sirf logged-out user ko) aur app.js. /metrics isse band rakhta hai (usme JavaScript nahi)
-// allow_db = navbar ki category list ke liye DB use kar sakte hain? server.cpp ke error pages aur /metrics "false" dete hain:
-// accept thread ya metrics ko DB ka intezaar kabhi nahi karna chahiye (sirf memory ki purani list chalegi)
+// Builds the full page from layout.html. head_extra = extra <head> tag (e.g. the /metrics refresh); flash = message box on top.
+// interactive = popups + app.js (off for /metrics). allow_db = false for error pages and /metrics: they must never wait for the DB.
 static string page(const Request& req, const string& title, const string& content, const string& head_extra = "",
                    const string& flash = "", bool interactive = true, bool allow_db = true) {
     string modals = (interactive && req.user_id == 0) ? render("modals", pw_parts(false, nullptr)) : "";
@@ -240,7 +234,6 @@ static string page(const Request& req, const string& title, const string& conten
                              {"flash", flash}, {"content", content}, {"modals", modals}, {"scripts", scripts}});
 }
 
-// page bhejo aur status return karo (route me ek line me kaam)
 static int send_page(SOCKET client, const Request& req, int status, const string& title, const string& content,
                      const string& extra = "", const string& flash = "") {
     send_response(client, status, HTML, page(req, title, content, "", flash), with_cookie_fix(req, extra));
@@ -255,27 +248,27 @@ static int error_page(SOCKET client, const Request& req, int status, const strin
     return send_page(client, req, status, msg, error_content(msg));
 }
 
-// server.cpp ke apne error replies (400 / 408 / 503) ke liye: bina login ke poora page
+// For server.cpp's own error replies (400/408/503): a full page without login.
 string render_error_page(const string& message) {
     Request anonymous;
-    return page(anonymous, message, error_content(message), "", "", true, false);   // DB nahi: accept thread ko rukna nahi hai
+    return page(anonymous, message, error_content(message), "", "", true, false);   // No DB: the accept thread must not wait.
 }
 
-// 302 redirect: Post/Redirect/Get. location sirf hamare fixed paths hain (user input nahi)
+// 302 redirect (Post/Redirect/Get). location is always one of our fixed paths, never user input.
 static int redirect(SOCKET client, const Request& req, const string& location, const string& extra = "") {
     send_response(client, 302, HTML, render("plain", {{"message", "Redirecting..."}}),
                   "Location: " + location + "\r\n" + with_cookie_fix(req, extra));
     return 302;
 }
 
-// galat method par 405 + Allow header
+// 405 with an Allow header.
 static int method_not_allowed(SOCKET client, const Request& req, const string& allow) {
     send_response(client, 405, HTML, page(req, "Method Not Allowed", error_content("Method Not Allowed")),
                   with_cookie_fix(req, "Allow: " + allow + "\r\n"));
     return 405;
 }
 
-// "499.00" -> 49900 (paise). Paise ko integer me jodte hain taaki float ki galti na ho (price DECIMAL(10,2) hai)
+// "499.00" -> 49900 (paise): money is added as integers, not floats (price is DECIMAL(10,2)).
 static long long to_cents(const string& price) {
     long long v = 0;
     for (char c : price)
@@ -283,7 +276,7 @@ static long long to_cents(const string& price) {
     return v;
 }
 
-// 149900 -> "₹1,499", 103350 -> "₹1,033.50" (hazaar par comma; paise tabhi dikhte hain jab 00 na ho)
+// Formats paise as rupees with a thousands comma: 149900 -> 1,499 and 103350 -> 1,033.50 (paise shown only if not 00).
 static string rupees(long long cents) {
     string whole = to_string(cents / 100);
     string grouped;
@@ -297,12 +290,12 @@ static string rupees(long long cents) {
     return out;
 }
 
-// DB ki price string ("1499.00") seedhe ₹ text me
+// A DB price string ("1499.00") straight to rupee text.
 static string rupees_text(const string& price) {
     return rupees(to_cents(price));
 }
 
-// Har category ka ek emoji (card ke rangeen dibbe, navbar aur category tiles me). Table me na ho to 🛍️
+// One emoji per category (card background, navbar, category tiles); a default if the table has none.
 struct CategoryEmoji {
     const char* name;
     const char* emoji;
@@ -318,14 +311,14 @@ static string category_emoji(const string& name) {
     return "🛍️";
 }
 
-// category ke naam se ek rang (0-359): same category = hamesha same rang (card ka halka rangeen dibba)
+// A colour (0-359) from the category name: the same category always gets the same colour.
 static int thumb_hue(const string& category) {
     unsigned int sum = 0;
     for (unsigned char c : category) sum = sum * 31 + c;
     return (int)(sum % 360);
 }
 
-// status text se css class ka naam: sirf chhote akshar ("Logged out" -> "loggedout"). DB ka text hai, isliye saaf karke
+// CSS class from a status text: lower-case letters only ("Logged out" -> "loggedout"). The text comes from the DB, so it is cleaned.
 static string status_class(const string& status) {
     string out;
     for (unsigned char c : status)
@@ -333,7 +326,7 @@ static string status_class(const string& status) {
     return out.empty() ? "other" : out;
 }
 
-// order status ka dikhne wala naam (DB me PLACED, OUT_FOR_DELIVERY ... rehta hai). Unknown status jaisa hai waisa
+// Display name of an order status (the DB keeps PLACED, OUT_FOR_DELIVERY ...). Unknown statuses are shown as they are.
 static string status_label(const string& status) {
     if (status == "PLACED") return "Ordered";
     if (status == "PACKED") return "Packed";
@@ -344,15 +337,15 @@ static string status_label(const string& status) {
     return status;
 }
 
-// stock badge: "In stock" (hara) ya LOW_STOCK tak "Only N left" (narangi). Stock 0 par kuch nahi: wahan disabled button hota hai
+// Stock badge: "In stock" (green) or "Only N left" up to LOW_STOCK (orange). Nothing at 0: the button is disabled there.
 static string stock_html(const string& stock) {
     int n = atoi(stock.c_str());
     if (n <= 0) return "";
     if (n <= LOW_STOCK) return render("stock_low", {{"stock", to_string(n)}});
-    return render("stock_in", {{"stock", to_string(n)}});      // badge sirf "In stock" dikhata hai, tooltip me poori ginti
+    return render("stock_in", {{"stock", to_string(n)}});      // The badge only says "In stock"; the exact count is in the tooltip.
 }
 
-// "123" jaisa number hai? (sirf digits, 1 se 9 tak)
+// Digits only, 1 to 9 of them.
 static bool is_number(const string& s) {
     if (s.empty() || s.size() > 9) return false;
     for (char c : s)
@@ -360,7 +353,7 @@ static bool is_number(const string& s) {
     return true;
 }
 
-// LIKE me % _ aur ! ko apna normal arth na karne do (hum ESCAPE '!' use karte hain)
+// Stop % _ and ! from having their LIKE meaning (we use ESCAPE '!').
 static string escape_like(const string& s) {
     string out;
     for (char c : s) {
@@ -370,20 +363,18 @@ static string escape_like(const string& s) {
     return out;
 }
 
-// params me key ki value, na ho to ""
 static string param(const Request& req, const string& key) {
     auto it = req.params.find(key);
     return it == req.params.end() ? "" : it->second;
 }
 
-// form me key ki value, na ho to ""
 static string field(const Request& req, const string& key) {
     auto it = req.form.find(key);
     return it == req.form.end() ? "" : it->second;
 }
 
-// result ki har row me kam se kam n columns hain? (rows khali ho to bhi true; rows[0] se pehle
-// rows.empty() alag se dekho). Isse rows[i][j] kabhi range ke bahar nahi jayega
+// Does every row have at least n columns? (true for no rows; check rows.empty() separately before rows[0].)
+// This keeps rows[i][j] from ever going out of range.
 static bool cols_ok(const vector<vector<string>>& rows, size_t n) {
     for (auto& r : rows)
         if (r.size() < n) {
@@ -393,12 +384,11 @@ static bool cols_ok(const vector<vector<string>>& rows, size_t n) {
     return true;
 }
 
-// ---- categories ka cache ----
-// Navbar har page par category list maangta hai. Har baar DB jaana bekaar (categories kam badalti hain), isliye 60 second
-// memory me. Kai workers ek saath padhte hain, isliye mutex. DB fail ho to purani list chalti rehti hai.
+// ---- categories cache: the navbar needs them on every page and they rarely change, so keep them 60 s in memory ----
+// Many workers read it, so a mutex protects it. If the DB fails, the old list stays in use.
 static mutex cat_lock;
-static vector<vector<string>> cat_cache;        // (id, naam)
-static long long cat_loaded_us = 0;             // 0 = abhi tak load nahi hua
+static vector<vector<string>> cat_cache;        // (id, name).
+static long long cat_loaded_us = 0;             // 0 = not loaded yet.
 const long long CAT_CACHE_US = 60LL * 1000000LL;
 
 static vector<vector<string>> get_categories(bool allow_db) {
@@ -408,7 +398,7 @@ static vector<vector<string>> get_categories(bool allow_db) {
     cat_lock.unlock();
     if (fresh || !allow_db) return copy;
 
-    vector<vector<string>> rows;                 // DB ka kaam mutex ke bina
+    vector<vector<string>> rows;                 // DB work outside the mutex.
     if (!db_select(CATEGORIES_SQL, {}, rows) || !cols_ok(rows, 2)) return copy;
     cat_lock.lock();
     cat_cache = rows;
@@ -419,7 +409,7 @@ static vector<vector<string>> get_categories(bool allow_db) {
 
 // ---- sessions ----
 
-// 32 random bytes -> 64 hex characters. rand() nahi: wo guess ho sakta hai, BCryptGenRandom nahi
+// 32 random bytes -> 64 hex characters. Not rand(): it is guessable; BCryptGenRandom is not.
 static bool new_session_id(string& out) {
     unsigned char raw[32];
     if (BCryptGenRandom(nullptr, raw, sizeof(raw), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return false;
@@ -432,7 +422,7 @@ static bool new_session_id(string& out) {
     return true;
 }
 
-// cookie ki value sach me 64 hex chars hai? (warna DB tak jaane ki zaroorat nahi)
+// Is the cookie really 64 hex characters? (otherwise there is no need to ask the DB)
 static bool looks_like_session_id(const string& s) {
     if (s.size() != 64) return false;
     for (char c : s)
@@ -440,28 +430,28 @@ static bool looks_like_session_id(const string& s) {
     return true;
 }
 
-// cookie header: HttpOnly = JavaScript nahi padh sakti, SameSite=Lax = dusri site se POST me nahi jaati,
-// Path=/ = poori site par, Max-Age = kitne second baad browser hata de (0 = abhi hata do)
+// Cookie header: HttpOnly = JavaScript cannot read it, SameSite=Lax = not sent on cross-site POSTs,
+// Path=/ = whole site, Max-Age = seconds until the browser drops it (0 = now).
 static string session_cookie(const string& value, int max_age) {
     return "Set-Cookie: " + COOKIE_NAME + "=" + value + "; HttpOnly; SameSite=Lax; Path=/; Max-Age=" +
            to_string(max_age) + "\r\n";
 }
 
-// session dhundo, DB me check karo, req.user_id / user_name / cart_count bharo.
-// Connection m diya hua hai: yeh function jitni bhi queries chalaye sab usi par (get/put bahar wrapper karta hai)
+// Finds the session in the DB and fills req.user_id / user_name / cart_count.
+// All its queries use the given connection m (the caller does get_conn / put_conn).
 static void load_user_on(MYSQL* m, Request& req, const string& sid) {
-    // is_active = 1 wale session lo; expire hua ya nahi, wo SQL se hi (DB ki ghadi se) pooch lete hain
+    // Only is_active = 1 sessions; whether it expired is asked in SQL (the DB's clock).
     vector<vector<string>> rows;
     if (!db_select_on(m, "SELECT s.user_id, u.name, s.expires_at <= NOW(), u.role FROM user_sessions s "
                          "JOIN users u ON u.user_id = s.user_id WHERE s.session_id = ? AND s.is_active = 1",
                       {sid}, rows))
-        return;                         // DB error: anonymous maano
-    if (rows.empty()) return;           // session nahi mila / pehle hi band ho chuka (logout ya expire)
-    if (!cols_ok(rows, 4)) return;      // result ka shape galat: anonymous maano
+        return;                         // DB error: treat as anonymous.
+    if (rows.empty()) return;           // No such session, or already ended (logout or expiry).
+    if (!cols_ok(rows, 4)) return;      // Wrong result shape: treat as anonymous.
 
     if (rows[0][2] == "1") {
-        // session expire ho gaya: DB me band karo (logout_time = expires_at), user ko logged out maano,
-        // aur reply me cookie hatao. "AND is_active = 1": cleanup thread ne pehle band kiya ho to kuch nahi badlega
+        // Session expired: close it in the DB (logout_time = expires_at), treat as logged out, and remove the cookie in the reply.
+        // AND is_active = 1: if the cleanup thread closed it first, nothing changes.
         db_exec_on(m, "UPDATE user_sessions SET is_active = 0, logout_time = expires_at, end_reason = 'EXPIRED' "
                       "WHERE session_id = ? AND is_active = 1", {sid});
         req.clear_cookie = true;
@@ -469,53 +459,47 @@ static void load_user_on(MYSQL* m, Request& req, const string& sid) {
         return;
     }
 
-    // IDLE TIMEOUT (sliding expiry): session tab tak chalta hai jab tak user SESSION_MINUTES minute tak
-    // kuch na kare. Har request par expire time wapas "abhi + SESSION_MINUTES" kar dete hain, to jab tak
-    // user active hai logout nahi hota; sirf chup rehne par (idle) expire hota hai. Ek hi UPDATE me
-    // last_activity aur expires_at dono badalte hain, taaki dono hamesha saath rahein.
-    // WHERE me "is_active = 1 AND expires_at > NOW()": SELECT aur UPDATE ke beech session expire/logout ho gaya ho
-    // to use zinda nahi karte (0 rows match hongi)
+    // IDLE TIMEOUT (sliding expiry): every request moves expires_at to now + SESSION_MINUTES, so a session ends only after that long without activity.
+    // One UPDATE sets last_activity and expires_at together. WHERE is_active = 1 AND expires_at > NOW(): a session that just ended is not revived.
     int n = db_exec_on(m, "UPDATE user_sessions SET last_activity = NOW(), expires_at = " + EXPIRES_SQL +
                           " WHERE session_id = ? AND is_active = 1 AND expires_at > NOW()", {sid});
-    if (n == 0) {                       // session abhi abhi khatam ho gaya: logged out maano, cookie hatao
+    if (n == 0) {                       // The session just ended: treat as logged out, remove the cookie.
         req.clear_cookie = true;
         return;
     }
 
     req.user_id = atoi(rows[0][0].c_str());
     req.user_name = rows[0][1];
-    req.role = rows[0][3] == "ADMIN" ? "ADMIN" : "CUSTOMER";    // kuch aur (ya khali) = sabse kam haq
+    req.role = rows[0][3] == "ADMIN" ? "ADMIN" : "CUSTOMER";    // Anything else (or empty) gets the lowest rights.
     req.session_id = sid;
 
-    // Browser ki cookie aur DB ka expiry saath rahein, isliye har reply me cookie dobara bhejte hain (naya Max-Age).
-    // n < 0 (DB error): DB ka expiry badla nahi, to cookie bhi nahi badlte (user is baar andar aane diya)
+    // The browser cookie and the DB expiry must move together, so the cookie is sent again with every reply (new Max-Age).
+    // n < 0 (DB error): the DB expiry did not change, so the cookie stays too (the user is let in this time).
     req.refresh_cookie = (n > 0);
 
-    // nav bar ke "Cart (N items)" ke liye; error ho to 0 dikha do
+    // For the nav bar "Cart (N items)"; 0 on error.
     int count = cart_count(m, req.user_id);
     req.cart_count = count > 0 ? count : 0;
 }
 
-// har request par: cookie se session dhundo, req.user_id / user_name bharo.
-// Is request ki saari session queries ek hi connection par: get_conn shuru me, put_conn aakhir me
+// On every request: find the session from the cookie and fill req.user_id / user_name.
+// All session queries of this request use one connection: get_conn first, put_conn last.
 static void load_user(Request& req) {
     auto it = req.cookies.find(COOKIE_NAME);
-    if (it == req.cookies.end() || !looks_like_session_id(it->second)) return;   // cookie nahi: DB tak jaana nahi
+    if (it == req.cookies.end() || !looks_like_session_id(it->second)) return;   // No cookie: no need to ask the DB.
 
     int id = 0;
     MYSQL* m = get_conn(id);
-    if (m == nullptr) return;           // connection nahi mila: anonymous maano
+    if (m == nullptr) return;           // No connection: treat as anonymous.
     load_user_on(m, req, it->second);
-    put_conn(id);                       // load_user_on me early return ho ya na ho, connection yahin wapas
+    put_conn(id);                       // The connection goes back whether or not load_user_on returned early.
 }
 
 // ---- forms ----
 
 
 // ---- password policy ----
-// Niyam sirf server par asli hain (yahi check_password). Form ki checklist (app.js) sirf live dikhati hai, aur DB ke CHECK me yeh
-// niyam nahi: wo typed password par lagte hain, aur baad me hash karne par DB me typed shakal rahegi hi nahi.
-// Aam (common) passwords, chhote akshar me (match case-insensitive hota hai)
+// The rules live only in check_password; app.js just shows them live. No DB CHECK: they apply to typed passwords, not hashes.
 static const char* COMMON_PW[] = {"password@123", "admin@123", "qwerty@123", "welcome@123", "abcd@1234", "password@1234", "password1!",
                                   "passw0rd!", "p@ssw0rd", "p@ssword1", "admin@1234", "admin@12345", "qwerty@1234", "welcome@1",
                                   "welcome@1234", "test@1234", "india@123", "india@1234", "pass@1234", "abc@12345", "abc@1234",
@@ -527,7 +511,7 @@ static string lower_ascii(string t) {
     return t;
 }
 
-// characters ki ginti (bytes nahi): UTF-8 ka continuation byte (10xxxxxx) nahi ginte
+// Counts characters, not bytes: UTF-8 continuation bytes (10xxxxxx) are skipped.
 static size_t pw_chars(const string& t) {
     size_t n = 0;
     for (unsigned char c : t)
@@ -535,8 +519,8 @@ static size_t pw_chars(const string& t) {
     return n;
 }
 
-// Fail hue niyam: (niyam ka key, message), niyam ke order me (yahi order form ki checklist ka hai). Key form ki list me wahi niyam dikhane
-// ke kaam aata hai (data-rule). Upper / lower / digit / special sirf ASCII se gine jaate hain (special = chhapne layak, letter/digit nahi)
+// Failed rules as (rule key, message), in rule order (the form checklist uses the same order; the key is its data-rule).
+// Upper/lower/digit/special count ASCII only (special = printable, not a letter or digit).
 static vector<pair<string, string>> pw_failures(const string& pw, const string& name, const string& email, const string& old_pw) {
     vector<pair<string, string>> bad;
 
@@ -546,11 +530,11 @@ static vector<pair<string, string>> pw_failures(const string& pw, const string& 
 
     bool space = false, upper = false, lower = false, digit = false, special = false;
     for (unsigned char c : pw) {
-        if (c <= 32 || c == 127) space = true;                  // space, tab, newline aur baaki control characters
+        if (c <= 32 || c == 127) space = true;                  // Space, tab, newline and other control characters.
         else if (c >= 'A' && c <= 'Z') upper = true;
         else if (c >= 'a' && c <= 'z') lower = true;
         else if (c >= '0' && c <= '9') digit = true;
-        else if (c < 127) special = true;                       // 33..126 me letter/digit nahi
+        else if (c < 127) special = true;                       // 33..126 that is not a letter or digit.
     }
     if (space) bad.push_back({"space", "Password cannot contain spaces."});
     if (!upper) bad.push_back({"upper", "Password needs at least one uppercase letter (A-Z)."});
@@ -558,8 +542,8 @@ static vector<pair<string, string>> pw_failures(const string& pw, const string& 
     if (!digit) bad.push_back({"digit", "Password needs at least one number (0-9)."});
     if (!special) bad.push_back({"special", "Password needs at least one special character (like @ # $ ! %)."});
 
-    // naam ya email ka hissa (case-insensitive). Sirf 3+ characters ke tukde (warna "al" jaisa chhota naam har password rok deta):
-    // poora naam (space hata kar), naam ka har shabd, aur email me @ se pehle ka hissa
+    // Name or email part (case-insensitive), only pieces of 3+ characters (a short name like "al" would block every password):
+    // the full name (spaces removed), each word of the name, and the part of the email before @.
     string low = lower_ascii(pw);
     vector<string> bits;
     string joined, word;
@@ -591,22 +575,20 @@ static vector<pair<string, string>> pw_failures(const string& pw, const string& 
     return bad;
 }
 
-// Fail hue niyamon ke messages (khali list = password theek)
+// Messages of the failed rules (empty = password OK).
 vector<string> check_password(const string& pw, const string& name, const string& email, const string& old_pw) {
     vector<string> msgs;
     for (auto& f : pw_failures(pw, name, email, old_pw)) msgs.push_back(f.second);
     return msgs;
 }
 
-// password ka input (aankh wala button JavaScript chalne par hi dikhta hai). kind: new / confirm / old (app.js yahi dekhta hai)
+// Password input (the eye button only shows when JavaScript runs). kind: new / confirm / old (used by app.js).
 static string pw_field_html(const string& name, const string& kind, const string& autocomplete, const string& placeholder, int max_len) {
     return render("pw_field", {{"name", name}, {"kind", kind}, {"auto", autocomplete}, {"ph", placeholder}, {"max", to_string(max_len)}});
 }
 
-// niyamon ki checklist. Pehle chhupi rehti hai (css: .pw-rules { display: none }); app.js password field par focus / likhne par dikhati hai, aur
-// likhte waqt ✓ / ✗ karti hai. Aam passwords ki list data-common me: app.js ko wahi list milti hai jo server ke paas hai.
-// failed != nullptr: server ne galti pakdi. Tab list khuli aati hai aur sirf fail hue niyam dikhte hain (baaki .pw-passed se chhupe: app.js
-// user ke likhna shuru karte hi poori list live dikhati hai). JavaScript ke bina yahi fail hue niyam dikhte hain
+// Rules checklist: hidden by default (css .pw-rules); app.js shows it on focus/typing and marks each rule live. data-common gives app.js the same common-password list.
+// failed != nullptr (the server found a problem): the list is open and only the FAILED rules show (the rest are .pw-passed). Without JavaScript it stays so.
 struct PwRule {
     const char* key;
     string label;
@@ -642,15 +624,15 @@ static string pw_rules_html(bool with_different, const vector<string>* failed) {
                                {"state", failed != nullptr ? " server" : ""}, {"items", items}});
 }
 
-// signup page aur signup popup ke password hisse (password, confirm, checklist). change_form = /account/password.
-// failed = server ne jo niyam fail paye (key); nullptr = galti nahi (list chhupi rehti hai)
+// Password parts of the signup page and popup (password, confirm, checklist). change_form = /account/password.
+// failed = rule keys the server found failing; nullptr = no problem (the list stays hidden).
 static map<string, string> pw_parts(bool change_form, const vector<string>* failed) {
     return {{"password_field", pw_field_html(change_form ? "new_password" : "password", "new", "new-password", change_form ? "" : "Password", PW_MAX_LEN)},
             {"confirm_field", pw_field_html("confirm_password", "confirm", "new-password", change_form ? "" : "Confirm password", PW_MAX_LEN)},
             {"rules", pw_rules_html(change_form, failed)}};
 }
 
-// galtiyon ka laal box. Sirf ek simple galti ho to seedha text (jaise pehle), kai ho to list
+// Red error box: plain text for one simple error (as before), a list for several.
 static string errors_flash(const vector<string>& errs, bool as_list) {
     if (!as_list && errs.size() == 1) return flash_text("err", errs[0]);
     string items;
@@ -659,7 +641,7 @@ static string errors_flash(const vector<string>& errs, bool as_list) {
 }
 
 static string signup_form(const string& name, const string& email, const vector<string>* failed = nullptr) {
-    map<string, string> v = pw_parts(false, failed); // password fields kabhi dobara nahi bharte: sirf naam aur email wapas
+    map<string, string> v = pw_parts(false, failed); // Password fields are never refilled: only name and email come back.
     v["name"] = name;
     v["email"] = email;
     return render("signup", v);
@@ -669,7 +651,7 @@ static string login_form(const string& email) {
     return render("login", {{"email", email}});
 }
 
-// email simple check: ek '@', dono taraf kuch text, space nahi
+// Simple email check: one '@', text on both sides, no spaces.
 static bool email_ok(const string& e) {
     size_t at = e.find('@');
     if (at == string::npos || at == 0 || at + 1 >= e.size()) return false;
@@ -677,7 +659,7 @@ static bool email_ok(const string& e) {
     return e.find_first_of(" \t\r\n") == string::npos;
 }
 
-// signup form ke naam / email theek hain? galat ho to message return karta hai, theek ho to "" (password ke niyam check_password me)
+// Checks the signup name/email: returns a message or "" (the password rules are in check_password).
 static string signup_error(const string& name, const string& email) {
     if (name.empty() || email.empty()) return "Please fill in all fields.";
     if (name.size() > 100) return "Name is too long (max 100 characters).";
@@ -697,10 +679,10 @@ static int signup_page(SOCKET client, const Request& req) {
     string pass = field(req, "password");
     string confirm = field(req, "confirm_password");
 
-    // saari galtiyan ek saath (user ek-ek karke na theek kare): naam/email, dono password milte hain ya nahi, aur fail hue niyam
+    // All errors at once (so the user need not fix them one by one): name/email, passwords match, failed rules.
     vector<string> errs;
-    vector<string> failed;                  // fail hue password niyamon ke key: form ki list me sirf wahi dikhte hain
-    bool pw_problem = false;                // password se judi galti ho to hamesha list
+    vector<string> failed;                  // Keys of the failed password rules: the form list shows only these.
+    bool pw_problem = false;                // Any password-related error is always shown as a list.
     if (pass.empty() || confirm.empty()) {
         string e = signup_error(name, email);
         errs.push_back(e.empty() ? "Please fill in all fields." : e);
@@ -713,16 +695,16 @@ static int signup_page(SOCKET client, const Request& req) {
     if (!errs.empty())
         return send_page(client, req, 400, "Sign up", signup_form(name, email, pw_problem ? &failed : nullptr), "", errors_flash(errs, pw_problem));
 
-    // password abhi plain text me hai (project ki known limitation; baad me hash karna hai)
+    // The password is plain text for now (known limitation; hashing comes later).
     int code = 0;
     int n = db_exec("INSERT INTO users (name, email, password) VALUES (?, ?, ?)", {name, email, pass}, &code);
     if (n < 0) {
-        if (code == 1062)   // duplicate entry: email pehle se hai (UNIQUE)
+        if (code == 1062)   // Duplicate entry: the email already exists (UNIQUE).
             return send_page(client, req, 409, "Sign up", signup_form(name, email), "",
                              flash_text("err", "Email already registered."));
         return error_page(client, req, 500, "Database error");
     }
-    if (n != 1) return error_page(client, req, 500, "Could not create account");   // ek row judni chahiye thi
+    if (n != 1) return error_page(client, req, 500, "Could not create account");   // Exactly one row must have been added.
     log_tag("PAGE", "new user signed up");
     return redirect(client, req, "/login?registered=1");
 }
@@ -736,9 +718,9 @@ static int login_page(SOCKET client, const Request& req) {
 
     string email = trim(field(req, "email"));
     string pass = field(req, "password");
-    const string bad = "Invalid email or password.";   // email galat ho ya password, message ek hi
+    const string bad = "Invalid email or password.";   // Same message for a wrong email or a wrong password.
 
-    // BINARY: password ka match capital/small letters ke hisaab se (normal compare case-insensitive hota hai)
+    // BINARY: the password match is case-sensitive (a normal compare is not).
     vector<vector<string>> rows;
     if (!db_select("SELECT user_id FROM users WHERE email = ? AND BINARY password = ?", {email, pass}, rows))
         return error_page(client, req, 500, "Database error");
@@ -747,14 +729,13 @@ static int login_page(SOCKET client, const Request& req) {
         return send_page(client, req, 401, "Login", login_form(email), "", flash_text("err", bad));
     }
     if (!cols_ok(rows, 1)) return error_page(client, req, 500, "Database error");
-    string uid = rows[0][0];             // login par password ke niyam kabhi nahi dekhte: purane passwords chalte rehte hain
+    string uid = rows[0][0];             // Password rules are never checked at login: old passwords keep working.
 
     string sid;
     if (!new_session_id(sid)) return error_page(client, req, 500, "Could not create session");
 
-    // expires_at = abhi + SESSION_MINUTES (aage har request par badhta rehta hai: idle timeout, load_user dekho)
-    // INSERT fail hua (ya 1 row nahi judi) to cookie set NAHI karte: warna browser ke paas aisi session id hogi
-    // jo DB me hai hi nahi
+    // expires_at = now + SESSION_MINUTES (it moves on every request: idle timeout, see load_user_on).
+    // If the INSERT fails (or adds no row) no cookie is set: the browser would hold a session id that is not in the DB.
     int n = db_exec("INSERT INTO user_sessions (session_id, user_id, expires_at) VALUES (?, ?, " + EXPIRES_SQL + ")",
                     {sid, uid});
     if (n != 1) {
@@ -770,13 +751,13 @@ static int login_page(SOCKET client, const Request& req) {
 
 static string change_pw_form(const Request& req, const string& email, const vector<string>* failed = nullptr) {
     map<string, string> v = pw_parts(true, failed);
-    v["current_field"] = pw_field_html("current_password", "old", "current-password", "", 255);   // purana password 64 se lamba bhi ho sakta hai
+    v["current_field"] = pw_field_html("current_password", "old", "current-password", "", 255);   // The old password may be longer than 64.
     v["name"] = req.user_name;
     v["email"] = email;
     return render("change_password", v);
 }
 
-// GET /account/password = form, POST = badlo. Login zaroori. Purana password sahi hona chahiye (db.cpp ka password_change dekhta hai)
+// GET = form, POST = change. Login required; the old password must be right (password_change in db.cpp checks it).
 static int account_password_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "GET" && req.method != "POST") return method_not_allowed(client, req, "GET, POST");
@@ -815,12 +796,12 @@ static int account_password_page(SOCKET client, const Request& req) {
     return error_page(client, req, r.status == 503 ? 503 : 500, r.status == 503 ? r.message : "Database error");
 }
 
-// /logout sirf POST: session band, cookie hatao, /products par bhejo
+// /logout is POST only: end the session, remove the cookie, go to /products.
 static int logout_page(SOCKET client, const Request& req) {
     if (req.method != "POST") return method_not_allowed(client, req, "POST");
 
     if (req.user_id > 0) {
-        // DB error ho to cookie mat hatao: session DB me active hai, user ko "logged out" dikhana galat hoga
+        // On a DB error keep the cookie: the session is still active in the DB, so showing "logged out" would be wrong.
         if (db_exec("UPDATE user_sessions SET is_active = 0, logout_time = NOW(), end_reason = 'LOGOUT' "
                     "WHERE session_id = ?",
                     {req.session_id}) < 0)
@@ -830,21 +811,21 @@ static int logout_page(SOCKET client, const Request& req) {
     return redirect(client, req, "/products", session_cookie("", 0));
 }
 
-// cleanup thread ke liye: jo sessions expire ho chuke par abhi active hain, sab ek UPDATE me band karo
-// logout_time = expires_at (asli expire ka time, cleanup ka time nahi). Kitne band hue wo return hota hai
+// For the cleanup thread: close all expired but still active sessions in one UPDATE.
+// logout_time = expires_at (the real expiry time, not the cleanup time). Returns how many were closed.
 int close_expired_sessions() {
     return db_exec("UPDATE user_sessions SET is_active = 0, logout_time = expires_at, end_reason = 'EXPIRED' "
                    "WHERE is_active = 1 AND expires_at < NOW()", {});
 }
 
-// status text: Active / Logged out / Expired
+// Status text: Active / Logged out / Expired.
 static string session_status(const string& is_active, const string& expired, const string& end_reason) {
-    if (is_active == "1") return expired == "1" ? "Expired" : "Active";   // expire hua par abhi band nahi kiya gaya
-    if (end_reason == "FORCED") return "Ended by admin";                  // admin ne band kiya (Admin > Sessions)
-    return end_reason == "EXPIRED" ? "Expired" : "Logged out";            // LOGOUT ya purani row (NULL)
+    if (is_active == "1") return expired == "1" ? "Expired" : "Active";   // Expired but not closed yet.
+    if (end_reason == "FORCED") return "Ended by admin";                  // Ended by an admin (Admin > Sessions).
+    return end_reason == "EXPIRED" ? "Expired" : "Logged out";            // LOGOUT, or an old row (NULL).
 }
 
-// /sessions: is user ki login history, current session highlight
+// /sessions: this user's login history, the current session highlighted.
 static int sessions_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
 
@@ -858,7 +839,7 @@ static int sessions_page(SOCKET client, const Request& req) {
     string body;
     for (auto& r : rows) {
         bool current = (r[0] == req.session_id);
-        // poori session id kabhi page par nahi dikhate, sirf shuruaat ke 8 characters
+        // The full session id is never shown, only its first 8 characters.
         string status = session_status(r[4], r[5], r[6]);
         body += render("session_row", {{"row_class", current ? "me" : ""},
                                        {"session", r[0].substr(0, 8)},
@@ -874,13 +855,13 @@ static int sessions_page(SOCKET client, const Request& req) {
 
 // ---- shop pages ----
 
-// /test: jo request mili wahi dikhao
+// /test: shows the request as received.
 static int test_page(SOCKET client, const Request& req) {
     string params, headers;
     for (auto& kv : req.params)
         params += render("test_item", {{"key", kv.first}, {"sep", " = "}, {"value", kv.second}});
     for (auto& kv : req.headers) {
-        // cookie me session id hota hai, use page par nahi dikhate
+        // The cookie holds the session id: never show it on the page.
         string val = (kv.first == "cookie") ? "(hidden)" : kv.second;
         headers += render("test_item", {{"key", kv.first}, {"sep", ": "}, {"value", val}});
     }
@@ -890,7 +871,7 @@ static int test_page(SOCKET client, const Request& req) {
                                      {"params", params}, {"headers", headers}}));
 }
 
-// sql chalao pool wale connection se aur result, connection number, thread number dikhao (sirf testing)
+// Runs the SQL on a pool connection and shows the result, connection number and thread number (testing only).
 static int db_test_page(SOCKET client, const Request& req, const string& title, const string& sql) {
     string val;
     int conn = 0;
@@ -900,9 +881,9 @@ static int db_test_page(SOCKET client, const Request& req, const string& title, 
                                        {"thread", to_string(thread_id())}}));
 }
 
-// ---- "Add to cart" ke baad usi page par wapas aana ----
+// ---- going back to the same page after "Add to cart" ----
 
-// target se ek query param hata do: strip_param("/products?cat=3&added=5", "added") -> "/products?cat=3"
+// Removes one query parameter from a target: strip_param("/products?cat=3&added=5", "added") -> "/products?cat=3".
 static string strip_param(const string& target, const string& name) {
     size_t q = target.find('?');
     if (q == string::npos) return target;
@@ -915,35 +896,30 @@ static string strip_param(const string& target, const string& name) {
         string pair = target.substr(pos, amp - pos);
         pos = amp + 1;
         if (pair.empty()) continue;
-        if (pair.substr(0, pair.find('=')) == name) continue;   // yeh param hatana hai
+        if (pair.substr(0, pair.find('=')) == name) continue;   // This is the parameter to remove.
         kept += (kept.empty() ? "" : "&") + pair;
     }
     return kept.empty() ? target.substr(0, q) : target.substr(0, q) + "?" + kept;
 }
 
-// is page ka path + query, purane "added"/"cart_err" ke bina: form ke hidden "return" field me jaata hai
+// This page's path + query without the old "added"/"cart_err"; it goes into the form's hidden "return" field.
 static string return_target(const Request& req) {
     return strip_param(strip_param(req.target, "added"), "cart_err");
 }
 
-// OPEN REDIRECT se bachao: "return" form se aata hai, yani koi bhi likh sakta hai (return=//evil.com ya
-// https://evil.com bana kar user ko dusri site par bhej sakta hai). Isliye sirf hamari site ke path chalenge:
-//  - "/" se shuru ho, par "//" se nahi ("//evil.com" ka matlab dusri site hota hai)
-//  - "\" nahi (kuch browser "\" ko "/" samajhte hain)
-//  - space/control characters nahi (\r \n se Location header me nayi header line jodi ja sakti hai)
-// kuch bhi galat ho to /products
+// Stops an OPEN REDIRECT: "return" comes from the form, so anyone could send users to another site. Only our own paths pass:
+// start with "/" but not "//", no backslash, no space or control characters (\r \n could inject a header); otherwise /products.
 static string safe_return(const string& r) {
     const string fallback = "/products";
     if (r.empty() || r.size() > 1000 || r[0] != '/') return fallback;
     if (r.size() > 1 && r[1] == '/') return fallback;
     for (char c : r)
-        if (c == '\\' || c <= 32 || c == 127) return fallback;   // c <= 32 me non-ASCII bytes bhi aa jaate hain
+        if (c == '\\' || c <= 32 || c == 127) return fallback;   // c <= 32 also catches non-ASCII bytes.
     return r;
 }
 
-// ?added=<product id> (aur optional cart_err) ho to upar ka message: hara (add ho gaya) ya laal (problem)
-//   cart_err=stock -> "Only N left", cart_err=out -> "out of stock". Text hamare fixed hain; product ka naam DB se
-//   aur escape hota hai; added sirf number hone par use hota hai.
+// With ?added=<product id> (and optional cart_err) show a message: green (added) or red (problem). cart_err=stock -> "Only N left", out -> "out of stock".
+// The texts are fixed; the product name comes from the DB and is escaped; added is used only if it is a number.
 static string cart_notice(const Request& req) {
     string id = param(req, "added");
     if (!is_number(id) || atoi(id.c_str()) < 1) return "";
@@ -955,7 +931,7 @@ static string cart_notice(const Request& req) {
     string err = param(req, "cart_err");
     int stock = atoi(rows[0][1].c_str());
 
-    // message ke tukde templates me hain; naam engine escape karta hai
+    // The message pieces are templates; the engine escapes the name.
     if (err == "max")
         return flash_box("err", render("flash_max", {{"max", to_string(MAX_CART_QTY)}, {"name", name}}));
     if (err == "out" || (err == "stock" && stock == 0))
@@ -965,18 +941,16 @@ static string cart_notice(const Request& req) {
     return flash_box("ok", render("flash_added", {{"name", name}}));
 }
 
-// product ki photo (public/images/products/<id>.jpg) ho to <img>, warna category emoji (admin ke naye products ke liye).
-// find_static memory ki map dekhta hai (startup par load hui files), isliye yahan disk nahi padhte. id DB ka number hai
+// Product photo (public/images/products/<id>.jpg) if it exists, otherwise the category emoji (for products added in admin).
+// find_static looks in the in-memory map, so there is no disk read here. The id is a DB number.
 static string product_thumb(const string& id, const string& category) {
     string src = "images/products/" + id + ".jpg";
     if (find_static(src) != nullptr) return render("thumb_photo", {{"src", src}});
     return render("thumb_emoji", {{"emoji", category_emoji(category)}});
 }
 
-// ek product ka card (home, products, har jagah wahi): rangeen dibba + photo (ya category emoji), naam, ek line ka description,
-// ₹ price, stock badge aur poori chaudai ka button. back = is page ka path+query (add ke baad yahin wapas)
-// Button: logged-in = "Add to cart" (POST), guest = "Sign in to buy" (login popup kholta hai), stock 0 = disabled "Out of stock"
-// (server bhi /cart/add par mana karta hai: cart_add_steps). POST me sirf product_id aur return jaata hai: price/cart_id server nikalta hai
+// One product card (used everywhere): photo or emoji, name, description, price, stock badge, button. back = this page's path + query.
+// Button: logged in = add to cart (POST), guest = sign in (popup), stock 0 = disabled. The server refuses it too (cart_add_steps); price and cart_id never come from the form.
 static string product_card(const vector<string>& p, const string& back, bool logged_in) {
     bool sold_out = (p[4] == "0");
     string action = sold_out ? render("soldout", {})
@@ -987,7 +961,7 @@ static string product_card(const vector<string>& p, const string& back, bool log
                                    {"stock", stock_html(p[4])}, {"action", action}});
 }
 
-// /products?cat=ID&q=text&min=N&max=N  (navbar search, sidebar ki category aur price filter, "Under ₹1,000" link)
+// /products?cat=ID&q=text&min=N&max=N (navbar search, sidebar category and price filter, the "Under 1,000" link).
 static int products_page(SOCKET client, const Request& req) {
     string cat = param(req, "cat");
     string q = param(req, "q");
@@ -999,7 +973,7 @@ static int products_page(SOCKET client, const Request& req) {
 
     vector<vector<string>> cats = get_categories(true);
 
-    // SQL ke tukde fixed hain; user ka data sirf args me jaata hai (? ki jagah): category, naam, min aur max price
+    // SQL pieces are fixed; user data goes only into args (the ?): category, name, min and max price.
     string sql = "SELECT p.product_id, p.name, c.category_name, p.price, p.stock, p.description "
                  "FROM products p JOIN categories c ON c.category_id = p.category_id WHERE p.is_active = TRUE";
     vector<string> args;
@@ -1029,7 +1003,7 @@ static int products_page(SOCKET client, const Request& req) {
     string back = return_target(req);
     for (auto& p : prods) cards += product_card(p, back, req.user_id > 0);
 
-    // sidebar: All + har category (chuni hui "on"), aur price form jo cat / q ko hidden fields me sambhalta hai
+    // Sidebar: All + each category (the chosen one "on"), and a price form that keeps cat / q as hidden fields.
     string side = render("side_cat", {{"on_class", cat.empty() ? " on" : ""}, {"href", "/products"},
                                       {"emoji", "\xF0\x9F\x9B\x8D\xEF\xB8\x8F"}, {"label", "All"}});
     string heading = "All products";
@@ -1056,8 +1030,8 @@ static int products_page(SOCKET client, const Request& req) {
     return send_page(client, req, 200, "Products", content, "", cart_notice(req));
 }
 
-// Home page: hero, 4 tiles, "Shop by category" (emoji tiles -> /products?cat=N) aur "Budget picks under ₹1,000" (wahi card).
-// Database na chale to bhi hero aur tiles dikhte hain (category / budget hisse bas nahi aate): home page kabhi 500 nahi deta
+// Home page: hero, 4 tiles, "Shop by category" and "Budget picks under 1,000" (same card).
+// Hero and tiles show even if the DB is down (only the category and budget parts are missing): home never gives 500.
 static int home_page(SOCKET client, const Request& req) {
     vector<vector<string>> cats = get_categories(true);
     vector<vector<string>> budget;
@@ -1071,7 +1045,7 @@ static int home_page(SOCKET client, const Request& req) {
         tiles += render("category_tile", {{"id", c[0]}, {"emoji", category_emoji(c[1])}, {"name", c[1]}});
 
     string cards;
-    string back = return_target(req);       // "Add to cart" ke baad yahin (home par) wapas aate hain
+    string back = return_target(req);       // "Add to cart" returns here (to home).
     for (auto& p : budget) cards += product_card(p, back, req.user_id > 0);
 
     string budget_text = rupees((long long)BUDGET_MAX * 100);
@@ -1108,11 +1082,10 @@ static int product_page(SOCKET client, const Request& req) {
     return send_page(client, req, 200, p[1], content, "", cart_notice(req));
 }
 
-// ---- cart ----
-// Har cart page login maangta hai. cart_id hamesha logged-in user (session) se aata hai, form se kabhi nahi,
-// aur price hamesha DB se. Form se sirf product_id aur qty liye jaate hain.
+// ---- cart: every cart page needs login; cart_id always comes from the session user, never from the form ----
+// The price always comes from the DB. Only product_id and qty are read from the form.
 
-// text ek number hai aur lo..hi ke beech? to out me daalo
+// Is the text a number between lo and hi? (out gets the value)
 static bool parse_range(const string& s, int lo, int hi, int& out) {
     if (!is_number(s)) return false;
     int v = atoi(s.c_str());
@@ -1121,13 +1094,13 @@ static bool parse_range(const string& s, int lo, int hi, int& out) {
     return true;
 }
 
-// product_id valid hai? (number, 1 ya zyada)
+// Valid product id? (a number, 1 or more)
 static bool valid_product_id(const string& s) {
     int v = 0;
     return parse_range(s, 1, 999999999, v);
 }
 
-// cart ke items padho; cart na ho to rows khali. Ek hi connection, aur put_conn hamesha hota hai (return ek hi jagah)
+// Reads the cart items (empty if there is no cart). One connection, and put_conn always runs (a single return point).
 static bool load_cart_rows(int user_id, vector<vector<string>>& rows) {
     rows.clear();
     int id = 0;
@@ -1140,7 +1113,7 @@ static bool load_cart_rows(int user_id, vector<vector<string>>& rows) {
     return ok;
 }
 
-// ek item ki line: naam, price, qty (update form), subtotal, remove button, stock warning
+// One item row: name, price, qty (update form), subtotal, remove button, stock warning.
 static string cart_row(const vector<string>& r, long long& total) {
     int qty = atoi(r[3].c_str());
     int stock = atoi(r[4].c_str());
@@ -1148,7 +1121,7 @@ static string cart_row(const vector<string>& r, long long& total) {
     total += sub;
 
     string warn;
-    if (r.size() > 5 && r[5] == "0") warn = render("stock_warn", {{"message", "No longer available"}});   // admin ne hide kiya
+    if (r.size() > 5 && r[5] == "0") warn = render("stock_warn", {{"message", "No longer available"}});   // Hidden by the admin.
     else if (stock == 0) warn = render("stock_warn", {{"message", "Out of stock"}});
     else if (qty > stock) warn = render("stock_warn", {{"message", "Only " + to_string(stock) + " left"}});
 
@@ -1175,9 +1148,8 @@ static int cart_page(SOCKET client, const Request& req) {
     return send_page(client, req, 200, "Cart", render("cart", {{"rows", body}, {"total", rupees(total)}}));
 }
 
-// cart/add ke andar ka kaam (m diya hua hai; get/put bahar hota hai). Status return karta hai, galti ho to msg me.
-// problem (200 ke saath): "" = sab theek, "out" = stock 0 tha (add nahi hua), "stock" = add hua par cart me
-// quantity ab stock se zyada hai. Page par isse laal message dikhta hai
+// The work inside cart/add (m is given; get/put is outside). Returns the status; a problem goes in msg.
+// problem (with 200): "" = fine, "out" = stock was 0 (not added), "stock" = added but the cart quantity is now above stock (red message).
 static int cart_add_steps(MYSQL* m, int user_id, const string& pid, const string& qty, string& msg,
                           string& problem) {
     problem = "";
@@ -1193,8 +1165,8 @@ static int cart_add_steps(MYSQL* m, int user_id, const string& pid, const string
     int stock = atoi(rows[0][0].c_str());
     if (stock == 0) { problem = "out"; return 200; }
 
-    // add se pehle cart me kitni quantity thi? (0 = item nahi tha). Isse pata chalta hai ki MAX_CART_QTY ne kuch kaata ya nahi.
-    // (sirf message ke liye; asli add neeche ek atomic query hai, isliye yahan race se nuksan nahi)
+    // Quantity in the cart before the add (0 = not there): tells whether MAX_CART_QTY cut something.
+    // Only for the message; the real add is one atomic query below, so a race cannot hurt here.
     int before = 0;
     if (db_select_on(m, "SELECT quantity FROM cart_items WHERE cart_id = ? AND product_id = ?",
                      {to_string(cart_id), pid}, rows) && !rows.empty() && !rows[0].empty())
@@ -1202,11 +1174,11 @@ static int cart_add_steps(MYSQL* m, int user_id, const string& pid, const string
 
     if (!cart_add(m, cart_id, pid, qty)) { msg = "Database error"; return 500; }
 
-    // MAX_CART_QTY se upar jaata to cap laga: "added" nahi, "Maximum N per item" dikhana hai
+    // Above MAX_CART_QTY the cap applied: show "Maximum N per item", not "added".
     if (before + atoi(qty.c_str()) > MAX_CART_QTY) { problem = "max"; return 200; }
 
-    // stock se zyada cart me ho sakta hai (stock baad me bhi badal sakta hai): bas user ko bata dete hain
-    // (nayi quantity ek select se: add ke baad ka sach wahi hai, jo atomic query ne banaya)
+    // The cart may hold more than the stock (stock can change later): just tell the user.
+    // (The new quantity comes from a SELECT: after the add, that is the truth the atomic query made.)
     if (db_select_on(m, "SELECT quantity FROM cart_items WHERE cart_id = ? AND product_id = ?",
                      {to_string(cart_id), pid}, rows) &&
         !rows.empty() && !rows[0].empty() && atoi(rows[0][0].c_str()) > stock)
@@ -1226,21 +1198,21 @@ static int cart_add_page(SOCKET client, const Request& req) {
     if (!valid_product_id(pid)) return error_page(client, req, 400, "Invalid product id");
     if (!parse_range(qty, 1, MAX_CART_QTY, q))
         return error_page(client, req, 400, "Quantity must be a number from 1 to " + to_string(MAX_CART_QTY));
-    qty = to_string(q);                 // "007" jaisa text saaf number ban jaye
+    qty = to_string(q);                 // "007" becomes a clean number.
 
     string msg = "Database error";
     string problem;
     int status = 500;
     int id = 0;
-    MYSQL* m = get_conn(id);            // is request ki saari queries isi ek connection par
+    MYSQL* m = get_conn(id);            // All queries of this request use this one connection.
     if (m != nullptr) {
         status = cart_add_steps(m, req.user_id, pid, qty, msg, problem);
-        put_conn(id);                   // steps me kahin se bhi return ho, connection yahin wapas aata hai
+        put_conn(id);                   // The connection goes back whatever path the steps took.
     }
     if (status != 200) return error_page(client, req, status, msg);
 
-    // Post/Redirect/Get: us page par wapas jahan se button dabaya tha, ?added=<id> ke saath.
-    // "return" safe_return se guzarta hai (open redirect nahi); purane added/cart_err hata kar naye jodte hain
+    // Post/Redirect/Get: back to the page where the button was pressed, with ?added=<id>.
+    // "return" goes through safe_return (no open redirect); old added/cart_err are removed, new ones added.
     string back = strip_param(strip_param(safe_return(field(req, "return")), "added"), "cart_err");
     back += (back.find('?') == string::npos ? "?" : "&") + string("added=") + pid;
     if (!problem.empty()) back += "&cart_err=" + problem;
@@ -1250,13 +1222,13 @@ static int cart_add_page(SOCKET client, const Request& req) {
 static int cart_update_steps(MYSQL* m, int user_id, const string& pid, const string& qty, string& msg) {
     int cart_id = get_active_cart(m, user_id);
     if (cart_id == 0) { msg = "Database error"; return 500; }
-    int n = cart_set_qty(m, cart_id, pid, qty);     // qty "0" = item hat jata hai
+    int n = cart_set_qty(m, cart_id, pid, qty);     // qty "0" removes the item.
     if (n < 0) { msg = "Database error"; return 500; }
     if (n == 0) { msg = "That item is not in your cart"; return 404; }
     return 200;
 }
 
-// POST /cart/update (product_id, qty: 0..MAX_CART_QTY, 0 = hata do)
+// POST /cart/update (product_id, qty: 0..MAX_CART_QTY, 0 = remove).
 static int cart_update_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "POST") return method_not_allowed(client, req, "POST");
@@ -1283,9 +1255,9 @@ static int cart_update_page(SOCKET client, const Request& req) {
 
 static int cart_remove_steps(MYSQL* m, int user_id, const string& pid, string& msg) {
     int cart_id = find_active_cart(m, user_id);
-    if (cart_id == 0) return 200;                   // cart hi nahi hai: hatane ko kuch nahi
+    if (cart_id == 0) return 200;                   // No cart at all: nothing to remove.
     if (cart_remove(m, cart_id, pid) < 0) { msg = "Database error"; return 500; }
-    return 200;                                     // item pehle se nahi tha (double click) to bhi theek
+    return 200;                                     // The item was not there (e.g. a double click): fine.
 }
 
 // POST /cart/remove (product_id)
@@ -1310,20 +1282,20 @@ static int cart_remove_page(SOCKET client, const Request& req) {
 
 // ---- shipping addresses ----
 
-// address text ki 10 values r[o..o+9]: first, last, phone, line1, line2, landmark, city, state_name, pincode, type.
-// Customer card, checkout, order page aur admin order page sab yahi use karte hain (order page par order_addresses ki copy se)
+// The 10 address text values r[o..o+9]: first, last, phone, line1, line2, landmark, city, state_name, pincode, type.
+// Used by the address card, checkout, order page and admin order page (the order page uses the order_addresses copy).
 static string address_html(const vector<string>& r, size_t o) {
-    string extra;                       // line2 aur landmark: khali ho to line hi nahi
+    string extra;                       // line2 and landmark: no line at all if empty.
     if (!r[o + 4].empty()) extra += render("address_extra", {{"text", r[o + 4]}});
     if (!r[o + 5].empty()) extra += render("address_extra", {{"text", "Landmark: " + r[o + 5]}});
-    string type = r[o + 9];             // "HOME" -> "Home"
+    string type = r[o + 9];             // "HOME" -> "Home".
     for (size_t i = 0; i < type.size(); i++) type[i] = (i == 0) ? (char)toupper((unsigned char)type[i]) : (char)tolower((unsigned char)type[i]);
     return render("address_text", {{"name", r[o] + " " + r[o + 1]}, {"type", type}, {"type_class", status_class(r[o + 9])},
                                    {"line1", r[o + 3]}, {"extra", extra}, {"city", r[o + 6]}, {"state", r[o + 7]},
                                    {"pincode", r[o + 8]}, {"phone", r[o + 2]}});
 }
 
-// user ke active addresses (default pehle). Columns: address_id, 10 text values (address_html ke liye), is_default
+// The user's active addresses (default first). Columns: address_id, 10 text values (for address_html), is_default.
 static bool load_addresses(int user_id, vector<vector<string>>& rows) {
     if (!db_select("SELECT a.address_id, a.first_name, a.last_name, a.phone, a.line1, IFNULL(a.line2, ''), IFNULL(a.landmark, ''), "
                    "a.city, s.state_name, a.pincode, a.address_type, a.is_default FROM addresses a "
@@ -1333,7 +1305,7 @@ static bool load_addresses(int user_id, vector<vector<string>>& rows) {
     return cols_ok(rows, 12);
 }
 
-// kisi order ka shipping address (order_addresses ki copy), order page / admin order page ke liye. Purana order = "No address"
+// An order's shipping address (the order_addresses copy) for the order pages. An old order shows "No address".
 static bool order_address_text(const string& order_id, string& out) {
     vector<vector<string>> rows;
     if (!db_select("SELECT first_name, last_name, phone, line1, IFNULL(line2, ''), IFNULL(landmark, ''), city, state_name, pincode, "
@@ -1343,7 +1315,7 @@ static bool order_address_text(const string& order_id, string& out) {
     return true;
 }
 
-// /addresses?ok=... ke upar ka message (text hamara fixed)
+// Message above /addresses?ok=... (fixed text).
 static string address_notice(const Request& req) {
     string ok = param(req, "ok");
     if (ok == "added") return flash_text("ok", "Address added.");
@@ -1353,7 +1325,7 @@ static string address_notice(const Request& req) {
     return "";
 }
 
-// GET /addresses: saare addresses cards me (Default badge, Edit, Delete, Set as default)
+// GET /addresses: all addresses as cards (Default badge, Edit, Delete, Set as default).
 static int addresses_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "GET") return method_not_allowed(client, req, "GET");
@@ -1377,7 +1349,7 @@ static int addresses_page(SOCKET client, const Request& req) {
     return send_page(client, req, 200, "Addresses", content, "", address_notice(req));
 }
 
-// form ke fields request se (galat ya khali ho to address_check message dega)
+// Form fields from the request (address_check reports anything wrong or empty).
 static Address read_address(const Request& req) {
     Address a;
     a.id = trim(field(req, "address_id"));
@@ -1394,12 +1366,12 @@ static Address read_address(const Request& req) {
     return a;
 }
 
-// "checkout se aaye the" yaad rakho: add/edit ke baad wapas /checkout. Sirf yeh ek fixed value, koi URL nahi
+// Remember "came from checkout": go back to /checkout after add/edit. Only this one fixed value, never a URL.
 static bool from_checkout(const Request& req) {
     return param(req, "return") == "checkout" || field(req, "return") == "checkout";
 }
 
-// address form: states ki list DB se (36 rows), type ke teen options, jo user ne bhara wo wapas
+// Address form: the states list from the DB (36 rows), the 3 type options, and what the user typed.
 static int address_form_page(SOCKET client, const Request& req, int status, const Address& a, bool is_new, const string& error) {
     vector<vector<string>> states;
     if (!db_select("SELECT state_id, state_name FROM states ORDER BY state_name", {}, states) || !cols_ok(states, 2))
@@ -1427,7 +1399,7 @@ static int address_form_page(SOCKET client, const Request& req, int status, cons
     return send_page(client, req, status, is_new ? "Add address" : "Edit address", content, "", error.empty() ? "" : flash_text("err", error));
 }
 
-// save ka nateeja: kamyab to wapas (checkout ya /addresses), galat input par form wapas message ke saath, baaki error page
+// After a save: success goes back (checkout or /addresses), bad input shows the form with the message, anything else an error page.
 static int address_saved(SOCKET client, const Request& req, const AddressResult& r, const Address& a, bool is_new) {
     if (r.status == 200) {
         if (from_checkout(req)) return redirect(client, req, "/checkout?address_id=" + to_string(r.address_id));
@@ -1437,7 +1409,7 @@ static int address_saved(SOCKET client, const Request& req, const AddressResult&
     return error_page(client, req, r.status == 404 || r.status == 503 ? r.status : 500, r.message);
 }
 
-// GET /addresses/new = khali form, POST = save. Sab checks server par (form ke pattern sirf suvidha hain)
+// GET /addresses/new = empty form, POST = save. All checks are on the server (the form patterns are only a convenience).
 static int address_new_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method == "GET") return address_form_page(client, req, 200, Address(), true, "");
@@ -1450,7 +1422,7 @@ static int address_new_page(SOCKET client, const Request& req) {
     return address_saved(client, req, address_save(req.user_id, a, true), a, true);
 }
 
-// GET /addresses/edit?id=N = bhara hua form, POST = save. Address sirf isi user ka (nahi to 404)
+// GET /addresses/edit?id=N = filled form, POST = save. Only this user's address (otherwise 404).
 static int address_edit_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "GET" && req.method != "POST") return method_not_allowed(client, req, "GET, POST");
@@ -1478,7 +1450,7 @@ static int address_edit_page(SOCKET client, const Request& req) {
     return address_form_page(client, req, 200, a, false, "");
 }
 
-// POST /addresses/delete (address_id): is_active = 0, DELETE nahi
+// POST /addresses/delete (address_id): is_active = 0, never DELETE.
 static int address_delete_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "POST") return method_not_allowed(client, req, "POST");
@@ -1500,10 +1472,10 @@ static int address_default_page(SOCKET client, const Request& req) {
     return error_page(client, req, r.status == 404 || r.status == 503 ? r.status : 500, r.message);
 }
 
-// ---- checkout aur orders ----
+// ---- checkout and orders ----
 
-// ---- payment (simulated gateway: asli paise nahi katte, par jaanch asli jaisi) ----
-// Net Banking ke bank: code form me jaata hai, naam payments.pay_detail me
+// ---- payment (simulated gateway: no real money, but the checks are real) ----
+// Net Banking banks: the code goes in the form, the name is stored in payments.pay_detail.
 struct Bank {
     const char* code;
     const char* name;
@@ -1511,14 +1483,14 @@ struct Bank {
 static const Bank BANKS[] = {{"SBI", "State Bank of India"}, {"HDFC", "HDFC Bank"}, {"ICICI", "ICICI Bank"}, {"AXIS", "Axis Bank"},
                              {"KOTAK", "Kotak Mahindra Bank"}, {"PNB", "Punjab National Bank"}, {"BOB", "Bank of Baroda"}};
 
-// Test values (asli gateways ke test mode jaise): yeh card / UPI ID "bank ne mana kiya" dete hain, ROLLBACK dikhane ke liye
+// Test values (like real gateways' test mode): this card / UPI ID means "declined by the bank", to show the ROLLBACK.
 const string DECLINED_CARD = "4000000000000002";
 const string DECLINED_UPI = "fail@upi";
 
-// card number ka Luhn checksum (har card number me hota hai): galat type kiya ek bhi digit pakad leta hai
+// Luhn checksum of a card number (every real number has it): it catches any single mistyped digit.
 static bool luhn_ok(const string& digits) {
     int sum = 0;
-    bool twice = false;                     // daayein se har doosra digit double
+    bool twice = false;                     // Every second digit from the right is doubled.
     for (size_t i = digits.size(); i-- > 0;) {
         int d = digits[i] - '0';
         if (twice) {
@@ -1531,7 +1503,7 @@ static bool luhn_ok(const string& digits) {
     return sum % 10 == 0;
 }
 
-// number ki shuruaat se card ka brand (sirf dikhane ke liye)
+// Card brand from the start of the number (for display only).
 static string card_brand(const string& d) {
     int two = atoi(d.substr(0, 2).c_str());
     int four = atoi(d.substr(0, 4).c_str());
@@ -1542,7 +1514,7 @@ static string card_brand(const string& d) {
     return "CARD";
 }
 
-// expiry "MM/YY": sahi month aur is mahine ya baad ka (is mahine ke aakhir tak card chalta hai)
+// Expiry "MM/YY": a valid month, this month or later (a card works until the end of its month).
 static bool expiry_ok(const string& e) {
     if (e.size() != 5 || e[2] != '/' || !is_number(e.substr(0, 2)) || !is_number(e.substr(3, 2))) return false;
     int mm = atoi(e.substr(0, 2).c_str());
@@ -1555,7 +1527,7 @@ static bool expiry_ok(const string& e) {
     return yy * 12 + mm >= cur;
 }
 
-// UPI ID: naam@bank, jaise ravi.kumar@okaxis (naam: a-z 0-9 . _ -, bank: sirf letters)
+// UPI ID: name@bank, e.g. ravi.kumar@okaxis (name: a-z 0-9 . _ -, bank: letters only).
 static bool upi_ok(const string& u) {
     size_t at = u.find('@');
     if (at == string::npos || at < 2 || at > 64 || u.size() - at - 1 < 2 || u.size() - at - 1 > 32) return false;
@@ -1567,7 +1539,7 @@ static bool upi_ok(const string& u) {
     return true;
 }
 
-// gateway ka transaction id: "TXN" + 12 random hex (wahi secure random jo session id ke liye, rand() nahi)
+// Gateway transaction id: "TXN" + 12 random hex (the same secure random as session ids, not rand()).
 static string new_txn_ref() {
     string hex;
     if (!new_session_id(hex)) return "";
@@ -1576,8 +1548,8 @@ static string new_txn_ref() {
     return out;
 }
 
-// checkout form ka payment padho aur jaancho. "" = theek (pay bhar gaya), warna user ko dikhane layak galti.
-// Card number aur CVV sirf yahin jaanche jaate hain: na DB me jaate hain, na log me, na form me wapas
+// Reads and checks the checkout payment. "" = OK (pay is filled), otherwise a message for the user.
+// The card number and CVV are only checked here: never stored, never logged, never sent back to the form.
 static string read_payment(const Request& req, PaymentInfo& pay) {
     pay.method = trim(field(req, "pay_method"));
     if (pay.method == "COD") return "";
@@ -1590,7 +1562,7 @@ static string read_payment(const Request& req, PaymentInfo& pay) {
     } else if (pay.method == "CARD") {
         string num;
         for (char c : field(req, "card_number")) {
-            if (c == ' ' || c == '-') continue;                 // "4111 1111 ..." bhi chalta hai
+            if (c == ' ' || c == '-') continue;                 // "4111 1111 ..." is accepted too.
             if (c < '0' || c > '9') return "Card number can only have digits.";
             num += c;
         }
@@ -1602,7 +1574,7 @@ static string read_payment(const Request& req, PaymentInfo& pay) {
         string cvv = trim(field(req, "card_cvv"));
         size_t want = (brand == "AMEX") ? 4 : 3;
         if (cvv.size() != want || !is_number(cvv)) return "CVV must be " + to_string(want) + " digits.";
-        pay.detail = brand + " **** " + num.substr(num.size() - 4);    // sirf yahi store hota hai
+        pay.detail = brand + " **** " + num.substr(num.size() - 4);    // Only this is stored.
         pay.declined = (num == DECLINED_CARD);
     } else if (pay.method == "NETBANKING") {
         string code = trim(field(req, "bank"));
@@ -1618,8 +1590,8 @@ static string read_payment(const Request& req, PaymentInfo& pay) {
     return "";
 }
 
-// checkout page ka payment panel. POST me galti ho to chuna hua tarika, UPI ID, naam, expiry, bank wapas bhare hote hain
-// (card number aur CVV kabhi wapas nahi bhejte: template me un fields ki value hai hi nahi)
+// Payment panel of the checkout page. After an error the chosen method, UPI ID, name, expiry and bank are filled in again;
+// the card number and CVV never come back (the template has no value for those fields).
 static string payment_panel(const Request& req) {
     bool post = req.method == "POST";
     string m = post ? trim(field(req, "pay_method")) : "";
@@ -1634,7 +1606,7 @@ static string payment_panel(const Request& req) {
                                        {"card_expiry", post ? field(req, "card_expiry") : ""}, {"banks", banks}});
 }
 
-// payment ka dikhne wala hissa (order page aur admin order page): tarika + detail, status ki goli, kab paid, transaction id
+// Payment as shown on the order pages: method + detail, status pill, paid time, transaction id.
 static string payment_html(const string& method, const string& detail, const string& status, const string& paid, const string& txn) {
     if (method.empty()) return "-";
     string label = method == "COD" ? "Cash on Delivery" : method == "UPI" ? "UPI" : method == "CARD" ? "Card"
@@ -1644,8 +1616,8 @@ static string payment_html(const string& method, const string& detail, const str
                                     {"paid", paid.empty() ? "" : ", paid " + paid}, {"txn", txn.empty() ? "" : ", Txn " + txn}});
 }
 
-// checkout ka confirm page: cart ka saar aur total dikhao (sirf dekhna, kuch badalta nahi)
-// status / error: payment form galat tha to wahi page 400 aur galti ke saath (address, tarika, UPI ID wapas bhare)
+// Checkout confirm page: cart summary and total (read-only, changes nothing).
+// status/error: if the payment form was wrong, the same page with 400 and the error (address, method, UPI ID filled in).
 static int checkout_confirm_page(SOCKET client, const Request& req, int status = 200, const string& error = "") {
     vector<vector<string>> rows;
     if (!load_cart_rows(req.user_id, rows)) return error_page(client, req, 500, "Database error");
@@ -1668,8 +1640,8 @@ static int checkout_confirm_page(SOCKET client, const Request& req, int status =
                                           " in your cart. Update your cart first.");
     }
 
-    // shipping address: radio cards. Default pehle aata hai (load_addresses ka order) aur wahi pehle se chuna hota hai.
-    // /checkout?address_id=N (abhi add kiya hua address) ho to wo chuna hota hai
+    // Shipping address: radio cards. The default comes first (load_addresses order) and is pre-selected.
+    // /checkout?address_id=N (a just-added address) selects that one.
     vector<vector<string>> addrs;
     if (!load_addresses(req.user_id, addrs)) return error_page(client, req, 500, "Database error");
     string want = req.method == "POST" ? field(req, "address_id") : param(req, "address_id");
@@ -1681,7 +1653,7 @@ static int checkout_confirm_page(SOCKET client, const Request& req, int status =
         cards += render("checkout_address", {{"id", addrs[i][0]}, {"checked", i == pick ? "checked" : ""},
                                              {"badge", addrs[i][11] == "1" ? render("address_default_badge", {}) : ""},
                                              {"text", address_html(addrs[i], 1)}});
-    if (addrs.empty()) cards = render("checkout_no_address", {});      // address ke bina order nahi: button hi nahi
+    if (addrs.empty()) cards = render("checkout_no_address", {});      // No address, no order: the button is not shown.
     return send_page(client, req, status, "Checkout",
                      render("checkout", {{"warnings", warnings}, {"addresses", cards}, {"payment", payment_panel(req)},
                                          {"rows", body}, {"total", rupees(total)},
@@ -1689,30 +1661,30 @@ static int checkout_confirm_page(SOCKET client, const Request& req, int status =
                      "", error.empty() ? "" : flash_text("err", error));
 }
 
-// GET /checkout = confirm page, POST /checkout = order banao (ek DB transaction, db.cpp ka do_checkout)
+// GET /checkout = confirm page, POST = place the order (one DB transaction: do_checkout in db.cpp).
 static int checkout_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method == "GET") return checkout_confirm_page(client, req);
     if (req.method != "POST") return method_not_allowed(client, req, "GET, POST");
 
-    // cart session ke user ka. Form se sirf address_id: wo isi user ka aur active hai ya nahi, transaction ke andar db.cpp dekhta hai
+    // The cart is the session user's. From the form only address_id: db.cpp checks inside the transaction that it is theirs and active.
     string aid = trim(field(req, "address_id"));
     if (!valid_product_id(aid))
         return send_page(client, req, 400, "Order not placed", render("checkout_failed", {}), "",
                          flash_text("err", "Please choose a shipping address."));
-    // payment form galat ho to wahi checkout page galti ke saath (address, tarika, UPI ID wapas bhare), order ki koshish hi nahi
+    // A wrong payment form shows the checkout page again with the error (address, method, UPI ID filled in); no order is attempted.
     PaymentInfo pay;
     string bad = read_payment(req, pay);
     if (!bad.empty()) return checkout_confirm_page(client, req, 400, bad);
     CheckoutResult r = do_checkout(req.user_id, atoi(aid.c_str()), pay);
-    if (r.status == 200) return redirect(client, req, "/order?id=" + to_string(r.order_id));   // Post/Redirect/Get
+    if (r.status == 200) return redirect(client, req, "/order?id=" + to_string(r.order_id));   // Post/Redirect/Get.
 
     string retry = (r.status == 503) ? "Retry-After: 2\r\n" : "";
     return send_page(client, req, r.status, "Order not placed", render("checkout_failed", {}), retry,
                      flash_text("err", r.message));
 }
 
-// GET /orders: is user ke saare orders (naye pehle)
+// GET /orders: all of this user's orders (newest first).
 static int orders_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "GET") return method_not_allowed(client, req, "GET");
@@ -1733,8 +1705,8 @@ static int orders_page(SOCKET client, const Request& req) {
     return send_page(client, req, 200, "Orders", render("orders", {{"rows", body}}));
 }
 
-// order ka header (payment ke saath) aur items, ek hi connection par. Order sirf us user ka mile jisne manga
-// ("AND o.user_id = ?"): doosre ka order mile hi nahi, isliye 404 (403 nahi: order hai ya nahi, yeh bhi nahi batate)
+// Order header (with payment) and items on one connection. Only the owner's order is found ("AND o.user_id = ?"):
+// someone else's order gives 404, not 403 (we do not even say whether the order exists).
 static bool load_order(MYSQL* m, int user_id, const string& id, vector<vector<string>>& head,
                        vector<vector<string>>& items, vector<vector<string>>& hist, string& eta) {
     if (!db_select_on(m, "SELECT o.order_id, o.status, o.total, o.created_at, IFNULL(p.method, ''), "
@@ -1747,9 +1719,8 @@ static bool load_order(MYSQL* m, int user_id, const string& id, vector<vector<st
                          "JOIN products p ON p.product_id = oi.product_id WHERE oi.order_id = ? ORDER BY p.name",
                       {id}, items))
         return false;
-    // tracking ke liye: har status kab bana (history) aur "Arriving by": agle step ka time + baaki steps ka average.
-    // GREATEST(.., NOW()): agar agle step ka time nikal chuka (delivery thread abhi pahunchi nahi) to ab se ginte hain.
-    // Seconds hamara apna int hai (order_eta_seconds), user ka text nahi
+    // For tracking: when each status happened (history) and "Arriving by" = next step time + average of the remaining steps.
+    // GREATEST(.., NOW()): if the next step is overdue, count from now. The seconds are our own int (order_eta_seconds).
     if (!db_select_on(m, "SELECT status, DATE_FORMAT(changed_at, '%d %b, %H:%i:%s'), changed_by FROM order_status_history "
                          "WHERE order_id = ? ORDER BY history_id", {id}, hist))
         return false;
@@ -1764,15 +1735,15 @@ static bool load_order(MYSQL* m, int user_id, const string& id, vector<vector<st
     return true;
 }
 
-// history me is status ka (pehla) time; nahi mila (purane order) to ""
+// Time of the (first) history row for this status; "" for an old order that has none.
 static string history_time(const vector<vector<string>>& hist, const string& status) {
     for (auto& h : hist)
         if (h.size() >= 2 && h[0] == status) return h[1];
     return "";
 }
 
-// order tracking: 5 steps (Ordered, Packed, Shipped, Out for delivery, Delivered). Poore hue = tick + history ka time,
-// abhi wala = highlight, baaki halke. CANCELLED order me jo steps hue wo tick, aakhir me laal "Cancelled".
+// Order tracking: 5 steps (Ordered, Packed, Shipped, Out for delivery, Delivered): done = tick + history time, current = highlighted, rest dim.
+// A CANCELLED order shows the steps that happened, then a red "Cancelled".
 static string timeline_html(const string& status, const vector<vector<string>>& hist, const string& eta) {
     static const char* STEPS[] = {"PLACED", "PACKED", "SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED"};
     bool cancelled = (status == "CANCELLED");
@@ -1785,7 +1756,7 @@ static string timeline_html(const string& status, const vector<vector<string>>& 
         string t = history_time(hist, STEPS[i]);
         string state = "todo";
         if (cancelled) {
-            if (t.empty()) continue;            // cancel hua to jo step hue hi nahi, wo dikhte nahi
+            if (t.empty()) continue;            // A cancelled order does not show steps that never happened.
             state = "done";
         }
         else if (status == "DELIVERED" || i < cur) state = "done";
@@ -1800,7 +1771,7 @@ static string timeline_html(const string& status, const vector<vector<string>>& 
 }
 
 // GET /order?id=N
-// order page ke upar ka message: /order?id=N&ok=cancelled (text hamara fixed)
+// Message above the order page: /order?id=N&ok=cancelled (fixed text).
 static string order_notice(const Request& req) {
     if (param(req, "ok") == "cancelled") return flash_text("ok", "Your order was cancelled. Its items went back to stock.");
     return "";
@@ -1827,15 +1798,15 @@ static int order_page(SOCKET client, const Request& req) {
     if (!cols_ok(head, 9) || !cols_ok(items, 4) || !cols_ok(hist, 3)) return error_page(client, req, 500, "Database error");
 
     vector<string>& o = head[0];
-    // payment: tarika + detail, status ki goli (PENDING peeli, PAID hari, REFUNDED jamuni ...), paid time, Txn id; payment na ho to "-"
+    // Payment: method + detail, status pill (PENDING yellow, PAID green, REFUNDED purple ...), paid time, Txn id; "-" if none.
     string pay = payment_html(o[4], o[7], o[5], o[6], o[8]);
     string body;
-    for (auto& r : items)       // price = jo order ke waqt thi (order_items me), products ki aaj ki nahi
+    for (auto& r : items)       // The price at the time of the order (order_items), not today's price.
         body += render("order_item_row", {{"id", r[0]}, {"name", r[1]}, {"qty", r[2]}, {"price", rupees_text(r[3])},
                                           {"subtotal", rupees(to_cents(r[3]) * atoi(r[2].c_str()))}});
-    string addr;                // shipping address (order ke waqt ki copy); purana order = "No address (old order)"
+    string addr;                // Shipping address (copy from order time); an old order shows "No address (old order)".
     if (!order_address_text(o[0], addr)) return error_page(client, req, 500, "Database error");
-    // "Cancel order" sirf PLACED ya PACKED order par (server bhi yahi check karta hai: order_change)
+    // "Cancel order" only for PLACED or PACKED (the server checks the same in order_change).
     string actions = (o[1] == "PLACED" || o[1] == "PACKED") ? render("order_cancel", {{"id", o[0]}}) : "";
     return send_page(client, req, 200, "Order #" + o[0],
                      render("order", {{"id", o[0]}, {"status", status_label(o[1])}, {"status_class", status_class(o[1])},
@@ -1845,7 +1816,7 @@ static int order_page(SOCKET client, const Request& req) {
                      "", order_notice(req));
 }
 
-// POST /order/cancel (order_id): customer apna PLACED / PACKED order cancel kare. Owner check order_change ke andar (doosre ka order = 404)
+// POST /order/cancel (order_id): the customer cancels their own PLACED/PACKED order. The owner check is inside order_change (someone else's = 404).
 static int order_cancel_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "POST") return method_not_allowed(client, req, "POST");
@@ -1861,28 +1832,26 @@ static int order_cancel_page(SOCKET client, const Request& req) {
 
 // ---- /metrics ----
 
-// "3.14" (2 decimal)
 static string num2(double v) {
     char buf[40];
     snprintf(buf, sizeof(buf), "%.2f", v);
     return buf;
 }
 
-// 3725 -> "1h 2m 5s"
+// 3725 -> "1h 2m 5s".
 static string uptime_text(long long s) {
     return to_string(s / 3600) + "h " + to_string((s % 3600) / 60) + "m " + to_string(s % 60) + "s";
 }
 
-// metrics table ki ek row
 static string metric_row(const string& name, const string& value) {
     return render("metric_row", {{"name", name}, {"value", value}});
 }
 
-// /metrics aur /metrics.json: andar ke numbers hain, isliye sirf isi computer (127.0.0.1) se, seedhe (proxy / tunnel ke through nahi).
-// Server har network card par sunta hai (INADDR_ANY), isliye yeh check zaroori hai: dusre computer se 403
+// /metrics and /metrics.json show internal numbers: only from this computer (127.0.0.1), directly (not through a proxy or tunnel).
+// The server listens on every network card (INADDR_ANY), so this check is needed: another computer gets 403.
 static int metrics_page(SOCKET client, const Request& req, bool json) {
-    // X-Forwarded-For / X-Forwarded-Host = request kisi tunnel / proxy (jaise ngrok) se aayi: proxy local machine par chalta
-    // hai, isliye socket ka IP 127.0.0.1 dikhta hai par asli client bahar ka hai. Aisi request ko bhi 403
+    // X-Forwarded-For / X-Forwarded-Host mean the request came through a tunnel or proxy (e.g. ngrok): the proxy runs on this machine,
+    // so the socket IP looks like 127.0.0.1 but the real client is outside. Also 403.
     bool proxied = req.headers.count("x-forwarded-for") > 0 || req.headers.count("x-forwarded-host") > 0;
     if (req.client_ip != "127.0.0.1" || proxied)
         return send_page(client, req, 403, "Forbidden",
@@ -1911,7 +1880,7 @@ static int metrics_page(SOCKET client, const Request& req, bool json) {
         return 200;
     }
 
-    // simple table; auto refresh: <meta http-equiv="refresh"> (JavaScript nahi)
+    // Simple table; auto refresh with <meta http-equiv="refresh"> (no JavaScript).
     string h;
     h += metric_row("Uptime", uptime_text(m.uptime_s));
     h += metric_row("Total requests", to_string(m.total));
@@ -1927,7 +1896,7 @@ static int metrics_page(SOCKET client, const Request& req, bool json) {
     h += metric_row("Requests/sec (last " + to_string(RPS_SECONDS) + " s)", num2(m.rps));
     h += metric_row("Checkout COMMIT / ROLLBACK", to_string(m.checkout_commit) + " / " + to_string(m.checkout_rollback));
     h += metric_row("Dropped logs", to_string(m.dropped_logs));
-    // interactive = false: is page par koi JavaScript nahi (auto refresh meta tag se hota hai)
+    // interactive = false: no JavaScript on this page (the refresh is a meta tag).
     send_response(client, 200, HTML, page(req, "Metrics", render("metrics", {{"rows", h}}),
                                           render("meta_refresh", {{"seconds", "2"}}), "", false, false),
                   "Cache-Control: no-store\r\n");
@@ -1935,11 +1904,10 @@ static int metrics_page(SOCKET client, const Request& req, bool json) {
 }
 
 // ---- admin panel (A1: dashboard, A2: products + categories) ----
-// Har /admin/* route sabse pehle require_admin se guzarta hai (route() me ek jagah, taaki koi route bach na jaye).
-// Badlav (add/edit/hide/restock/category) sirf POST: require_admin -> kaam -> 302 wapas us page par, ?ok=code ya ?err=code ke saath.
+// Every /admin/* route goes through require_admin first (one place), so no route can skip it. Changes are POST only, then 302 back with ?ok= or ?err=.
 
-// 0 = admin hai, aage badho. Warna jawab bhej diya gaya aur wahi status return hota hai:
-// login nahi -> 302 /login, login hai par ADMIN nahi -> 403
+// 0 = admin, carry on. Otherwise the reply was already sent and that status is returned:
+// not logged in -> 302 /login, logged in but not ADMIN -> 403.
 static int require_admin(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.role != "ADMIN") {
@@ -1949,7 +1917,7 @@ static int require_admin(SOCKET client, const Request& req) {
     return 0;
 }
 
-// flash messages: URL me sirf chhota code (?ok=restocked), text yahan fixed hai. Koi bhi text URL se page par nahi aata
+// Flash messages: the URL carries only a short code (?ok=restocked); the text is fixed here, so no text from the URL ever reaches the page.
 struct AdminMsg {
     const char* code;
     const char* text;
@@ -2000,12 +1968,12 @@ static string admin_notice(const Request& req) {
     return "";
 }
 
-// sidebar ka ek link: active wala indigo
+// One sidebar link; the active one is indigo.
 static string admin_link(const string& active, const string& key, const string& href, const string& icon, const string& label) {
     return render("admin_link", {{"on_class", active == key ? " on" : ""}, {"href", href}, {"icon", icon}, {"label", label}});
 }
 
-// admin ka poora page: store ka navbar nahi, apni sidebar. active = kaunsa link highlight ho
+// Full admin page: its own sidebar, not the store navbar. active = which link is highlighted.
 static int send_admin(SOCKET client, const Request& req, int status, const string& title, const string& active,
                       const string& content, const string& head_extra = "") {
     string side = admin_link(active, "dashboard", "/admin", "📊", "Dashboard") +
@@ -2022,17 +1990,17 @@ static int send_admin(SOCKET client, const Request& req, int status, const strin
     return status;
 }
 
-// admin page jo "nahi mila / galat" bataye (status ke saath)
+// An admin page that reports "not found / invalid" (with a status).
 static int admin_problem(SOCKET client, const Request& req, int status, const string& title, const string& message) {
     return send_admin(client, req, status, title, "", render("admin_message", {{"title", title}, {"message", message}}));
 }
 
-// is page ka apna path+query (ok/err hatakar): forms isse "return" me bhejte hain, taaki kaam ke baad yahin wapas aayein
+// This page's own path + query (without ok/err): forms send it as "return" so we come back here after the action.
 static string admin_self(const Request& req) {
     return strip_param(strip_param(req.target, "ok"), "err");
 }
 
-// "return" sirf hamare /admin ke path ho sakte hain (open redirect nahi), warna fallback
+// "return" may only be one of our /admin paths (no open redirect), otherwise the fallback.
 static string admin_back(const Request& req, const string& fallback) {
     string r = field(req, "return");
     bool in_admin = r == "/admin" || r.rfind("/admin/", 0) == 0 || r.rfind("/admin?", 0) == 0;
@@ -2040,27 +2008,27 @@ static string admin_back(const Request& req, const string& fallback) {
     return strip_param(strip_param(r, "ok"), "err");
 }
 
-// 302 wapas, hare (ok) ya laal (err) message ke saath
+// 302 back, with a green (ok) or red (err) message.
 static int admin_redirect(SOCKET client, const Request& req, const string& fallback, const string& ok, const string& err) {
     string back = admin_back(req, fallback);
     back += (back.find('?') == string::npos ? "?" : "&") + string(err.empty() ? "ok=" : "err=") + (err.empty() ? ok : err);
     return redirect(client, req, back);
 }
 
-// admin badlav ki audit row (db.cpp admin_audit): badlav hone ke baad. Order status aur role ki row transaction ke andar likhi jaati hai
+// Audit row of an admin change (admin_audit in db.cpp), written after the change. Order status and role rows are written inside their transaction.
 static void audit(const Request& req, const string& action, const string& details) {
     admin_audit(req.user_id, action, details);
 }
 
-// POST route par GET aaye (ya ulta): 405
+// A GET on a POST route (or the reverse): 405.
 static int admin_method(SOCKET client, const Request& req, const string& want) {
     if (req.method == want) return 0;
     return method_not_allowed(client, req, want);
 }
 
-// ---- admin: chhote helpers (validation) ----
+// ---- admin: small helpers (validation) ----
 
-// characters ki ginti (bytes nahi): UTF-8 ke beech ke bytes (10xxxxxx) gino mat. VARCHAR(100) characters me naapta hai
+// Counts characters, not bytes: UTF-8 continuation bytes (10xxxxxx) are skipped. VARCHAR(100) counts characters.
 static size_t utf8_len(const string& s) {
     size_t n = 0;
     for (unsigned char c : s)
@@ -2068,7 +2036,7 @@ static size_t utf8_len(const string& s) {
     return n;
 }
 
-// "499", "499.5", "499.50" -> paise. Sirf digits aur ek '.', 2 se zyada decimal nahi, 0 < price <= 1,000,000
+// "499", "499.5", "499.50" -> paise. Digits and one '.', at most 2 decimals, 0 < price <= 1,000,000.
 static bool parse_price(const string& s, long long& cents) {
     size_t dot = s.find('.');
     string whole = s.substr(0, dot);
@@ -2082,13 +2050,13 @@ static bool parse_price(const string& s, long long& cents) {
     return cents > 0 && cents <= 100000000LL;
 }
 
-// paise -> "1234.50" (DB ke DECIMAL ke liye)
+// Paise -> "1234.50" (for the DB DECIMAL).
 static string cents_plain(long long c) {
     string p = to_string(c % 100);
     return to_string(c / 100) + "." + (p.size() < 2 ? "0" : "") + p;
 }
 
-// "+5", "-2", "5" -> "5" / "-2". Poora number, 0 nahi, 100000 se zyada nahi
+// "+5", "-2", "5" -> "5" / "-2". A whole number, not 0, at most 100000.
 static bool parse_delta(const string& text, string& out) {
     string s = trim(text);
     bool neg = false;
@@ -2109,14 +2077,14 @@ static string admin_card(const string& label, const string& value, const string&
     return render("admin_card", {{"label", label}, {"value", value}, {"tone", tone}});
 }
 
-// chhota "+5 / -2" restock form (dashboard aur products table). back = kaam ke baad wapas kahan
+// Small "+5 / -2" restock form (dashboard and products table). back = where to return after the action.
 static string restock_form(const string& id, const string& name, const string& back) {
     return render("admin_restock_form", {{"id", id}, {"name", name}, {"back", back}});
 }
 
 // ---- admin: dashboard ----
 
-// GET /admin: saari queries EK pooled connection par (get_conn shuru me, put_conn page banane se pehle)
+// GET /admin: all queries on ONE pooled connection (get_conn first, put_conn before the page is built).
 static int admin_dashboard_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "GET") != 0) return 405;
     int id = 0;
@@ -2137,7 +2105,7 @@ static int admin_dashboard_page(SOCKET client, const Request& req) {
         db_select_on(m, "SELECT status, COUNT(*) FROM orders GROUP BY status ORDER BY COUNT(*) DESC, status", {}, by_status) &&
         db_select_on(m, "SELECT product_id, name, stock FROM products WHERE stock <= ? AND is_active = TRUE "
                         "ORDER BY stock, name LIMIT 20", {low}, low_rows);
-    put_conn(id);                       // ab connection ki zaroorat nahi: page banana DB ke bina
+    put_conn(id);                       // The connection is not needed any more: building the page uses no DB.
     if (!ok || stats.size() != 1 || !cols_ok(stats, 7) || !cols_ok(by_status, 2) || !cols_ok(low_rows, 3) ||
         (!recent.empty() && !cols_ok(recent, 5)))
         return error_page(client, req, 500, "Database error");
@@ -2181,7 +2149,7 @@ static int admin_products_page(SOCKET client, const Request& req) {
     bool show_hidden = param(req, "hidden") == "1";
     if (!cat.empty() && !is_number(cat)) return admin_problem(client, req, 400, "Products", "Bad category filter.");
 
-    // SQL ke tukde fixed; user ka data sirf args me (?)
+    // SQL pieces are fixed; user data only in args (?).
     string sql = "SELECT p.product_id, p.name, c.category_name, p.price, p.stock, p.is_active FROM products p "
                  "JOIN categories c ON c.category_id = p.category_id WHERE 1=1";
     vector<string> args;
@@ -2220,7 +2188,7 @@ static int admin_products_page(SOCKET client, const Request& req) {
                                                 {"count", count}, {"rows", rows}}));
 }
 
-// add / edit form ke fields (jaise user ne bhare)
+// Add/edit form fields (as the user typed them).
 struct ProductForm {
     string id, name, description, price, category;
 };
@@ -2235,7 +2203,7 @@ static ProductForm read_product_form(const Request& req) {
     return f;
 }
 
-// "" = sab theek (cents me price bhi), warna user ko dikhane layak galti
+// "" = all fine (the price in cents too), otherwise a message for the user.
 static string check_product_form(const ProductForm& f, long long& cents) {
     size_t n = utf8_len(f.name);
     if (n < 1 || n > 100) return "Name must be 1 to 100 characters.";
@@ -2263,7 +2231,7 @@ static int product_form_page(SOCKET client, const Request& req, int status, bool
     return send_admin(client, req, status, heading, "products", content);
 }
 
-// GET /admin/products/new (form) aur POST (create)
+// GET /admin/products/new (form) and POST (create).
 static int admin_product_new_page(SOCKET client, const Request& req) {
     if (req.method != "POST") {
         if (req.method != "GET") return method_not_allowed(client, req, "GET, POST");
@@ -2282,7 +2250,7 @@ static int admin_product_new_page(SOCKET client, const Request& req) {
     return admin_redirect(client, req, "/admin/products", "product_added", "");
 }
 
-// GET /admin/products/edit?id=N (form) aur POST (update: stock nahi badalta)
+// GET /admin/products/edit?id=N (form) and POST (update: does not change stock).
 static int admin_product_edit_page(SOCKET client, const Request& req) {
     if (req.method == "GET") {
         string id = param(req, "id");
@@ -2304,7 +2272,7 @@ static int admin_product_edit_page(SOCKET client, const Request& req) {
     string err = check_product_form(f, cents);
     if (!err.empty()) return product_form_page(client, req, err == "Database error" ? 500 : 400, false, f, err);
 
-    // stock is query me nahi hai: edit se stock kabhi nahi badalta (restock ka kaam alag, atomic)
+    // The stock is not in this query: editing never changes stock (restock is separate and atomic).
     int n = db_exec("UPDATE products SET name = ?, description = ?, price = ?, category_id = ? WHERE product_id = ?",
                     {f.name, f.description, cents_plain(cents), f.category, f.id});
     if (n < 0) return product_form_page(client, req, 500, false, f, "Database error");
@@ -2314,9 +2282,8 @@ static int admin_product_edit_page(SOCKET client, const Request& req) {
     return admin_redirect(client, req, "/admin/products", "product_saved", "");
 }
 
-// POST /admin/products/restock (product_id, delta "+5" / "-2"): EK atomic query.
-// "stock = stock + ?" (kabhi "stock = <number>" nahi): usi pal koi sale ho rahi ho to uska ghatna mit na jaye.
-// "AND stock + ? >= 0": zero se neeche jaane wala change DB hi mana kar deta hai (0 rows)
+// POST /admin/products/restock (product_id, delta "+5" / "-2"): ONE atomic query.
+// stock = stock + ? (never = <number>) so a sale at the same moment is not lost; AND stock + ? >= 0 refuses going below zero (0 rows).
 static int admin_restock_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "POST") != 0) return 405;
     string pid = trim(field(req, "product_id"));
@@ -2327,7 +2294,7 @@ static int admin_restock_page(SOCKET client, const Request& req) {
     int n = db_exec("UPDATE products SET stock = stock + CAST(? AS SIGNED) "
                     "WHERE product_id = ? AND stock + CAST(? AS SIGNED) >= 0", {delta, pid, delta});
     if (n < 0) return error_page(client, req, 500, "Database error");
-    if (n == 0) {                       // product hi nahi hai, ya stock zero se neeche jaata
+    if (n == 0) {                       // No such product, or the stock would go below zero.
         vector<vector<string>> rows;
         if (!db_select("SELECT 1 FROM products WHERE product_id = ?", {pid}, rows)) return error_page(client, req, 500, "Database error");
         return admin_redirect(client, req, "/admin/products", "", rows.empty() ? "no_product" : "stock_below");
@@ -2337,7 +2304,7 @@ static int admin_restock_page(SOCKET client, const Request& req) {
     return admin_redirect(client, req, "/admin/products", "restocked", "");
 }
 
-// POST /admin/products/toggle (product_id, active = 0 hide / 1 show). Product DELETE nahi hota: purane orders use point karte hain
+// POST /admin/products/toggle (product_id, active = 0 hide / 1 show). Products are never DELETEd: old orders point to them.
 static int admin_toggle_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "POST") != 0) return 405;
     string pid = trim(field(req, "product_id"));
@@ -2354,7 +2321,7 @@ static int admin_toggle_page(SOCKET client, const Request& req) {
 
 // ---- admin: categories ----
 
-// GET /admin/categories: har category aur kitne products (LEFT JOIN: khali category bhi 0 ke saath dikhe)
+// GET /admin/categories: each category with its product count (LEFT JOIN: an empty category shows 0).
 static int admin_categories_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "GET") != 0) return 405;
     vector<vector<string>> cats;
@@ -2370,7 +2337,7 @@ static int admin_categories_page(SOCKET client, const Request& req) {
     return send_admin(client, req, 200, "Categories", "categories", render("admin_categories", {{"rows", rows}}));
 }
 
-// categories badalte hi navbar ki purani list hata do: store me agli request se naya naam dikhe
+// After any category change drop the cached navbar list, so the next store request shows the new name.
 static void clear_category_cache() {
     cat_lock.lock();
     cat_cache.clear();
@@ -2378,14 +2345,14 @@ static void clear_category_cache() {
     cat_lock.unlock();
 }
 
-// category ke naam: 1 se 50 characters (VARCHAR(50)); "" = galat
+// Category name: 1 to 50 characters (VARCHAR(50)); "" = invalid.
 static string clean_category_name(const Request& req) {
     string name = trim(field(req, "name"));
     size_t n = utf8_len(name);
     return (n < 1 || n > 50) ? "" : name;
 }
 
-// MySQL error number -> admin message code (sirf categories ke liye)
+// MySQL error number -> admin message code (categories only).
 static int category_result(SOCKET client, const Request& req, int n, int code, const string& ok_code,
                            const string& audit_action, const string& details) {
     if (n < 0 && code == 1062) return admin_redirect(client, req, "/admin/categories", "", "cat_exists");
@@ -2418,7 +2385,7 @@ static int admin_category_rename_page(SOCKET client, const Request& req) {
     return category_result(client, req, n, code, "cat_renamed", "CATEGORY_RENAME", "category " + id + " renamed to '" + name + "'");
 }
 
-// DELETE sirf khali category ka: products ho to FK (1451) rok deta hai
+// DELETE works only for an empty category: with products the FK (1451) refuses.
 static int admin_category_delete_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "POST") != 0) return 405;
     string id = trim(field(req, "category_id"));
@@ -2430,7 +2397,7 @@ static int admin_category_delete_page(SOCKET client, const Request& req) {
 
 // ---- admin: orders (A3) ----
 
-// link me query text daalne ke liye: sirf A-Z a-z 0-9 - _ . ~ jaise hain, baaki %XX
+// For putting query text into a link: only A-Z a-z 0-9 - _ . ~ stay as they are, the rest is %XX.
 static string url_encode(const string& s) {
     static const char* HEX = "0123456789ABCDEF";
     string out;
@@ -2445,7 +2412,7 @@ static string url_encode(const string& s) {
     return out;
 }
 
-// Newer / Older links (filters base me), kuch na ho to khali
+// Newer / Older links (the filters stay in base); empty if there is nothing.
 static string admin_pager_html(const string& base, int pg, bool more) {
     string prev = pg > 1 ? render("admin_pager_link", {{"href", base + "page=" + to_string(pg - 1)}, {"label", "&larr; Newer"}}) : "";
     string next = more ? render("admin_pager_link", {{"href", base + "page=" + to_string(pg + 1)}, {"label", "Older &rarr;"}}) : "";
@@ -2453,7 +2420,7 @@ static string admin_pager_html(const string& base, int pg, bool more) {
     return render("admin_pager", {{"prev", prev}, {"next", next}, {"page", to_string(pg)}});
 }
 
-// order statuses (sirf jo DB ka CHECK allow karta hai): filter aur status badalne ke form ki jaanch ke liye
+// Order statuses (only those the DB CHECK allows): used to validate the filter and the status form.
 static bool known_order_status(const string& s) {
     static const char* ALL[] = {"PLACED", "PACKED", "SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED"};
     for (const char* a : ALL)
@@ -2473,7 +2440,7 @@ static int admin_orders_page(SOCKET client, const Request& req) {
     int pg = 1;
     if (!page_text.empty() && !parse_range(page_text, 1, 100000, pg)) return admin_problem(client, req, 400, "Orders", "Bad page number.");
 
-    // SQL ke tukde fixed; filter ki values sirf args me. LIMIT/OFFSET ke number hamare apne ints hain (user ka text nahi)
+    // SQL pieces are fixed; filter values only in args. The LIMIT/OFFSET numbers are our own ints (not user text).
     string sql = "SELECT o.order_id, u.name, u.email, o.created_at, "
                  "(SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.order_id = o.order_id), "
                  "o.total, o.status, IFNULL(p.status, '-') "
@@ -2485,14 +2452,14 @@ static int admin_orders_page(SOCKET client, const Request& req) {
     }
     if (!q.empty()) {
         sql += " AND (o.order_id = ? OR u.email LIKE ? ESCAPE '!')";
-        args.push_back(is_number(q) ? q : "0");              // number ho to order id bhi; order id 0 hota nahi
+        args.push_back(is_number(q) ? q : "0");              // A number also matches an order id; order id 0 does not exist.
         args.push_back("%" + escape_like(q) + "%");
     }
     sql += " ORDER BY o.order_id DESC LIMIT " + to_string(ORDERS_PER_PAGE + 1) + " OFFSET " + to_string((pg - 1) * ORDERS_PER_PAGE);
 
     vector<vector<string>> found;
     if (!db_select(sql, args, found) || !cols_ok(found, 8)) return error_page(client, req, 500, "Database error");
-    bool more = (int)found.size() > ORDERS_PER_PAGE;         // ek extra row mili = agla page hai
+    bool more = (int)found.size() > ORDERS_PER_PAGE;         // One extra row means there is a next page.
     if (more) found.resize(ORDERS_PER_PAGE);
 
     string rows;
@@ -2506,7 +2473,7 @@ static int admin_orders_page(SOCKET client, const Request& req) {
     for (const char* s : {"PLACED", "PACKED", "SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED"})
         options += render("search_option", {{"value", s}, {"label", status_label(s)}, {"selected", status == s ? "selected" : ""}});
 
-    // pager: filters link me saath rehte hain
+    // Pager: the filters stay in the links.
     string base = "/admin/orders?";
     if (!status.empty()) base += "status=" + url_encode(status) + "&";
     if (!q.empty()) base += "q=" + url_encode(q) + "&";
@@ -2518,7 +2485,7 @@ static int admin_orders_page(SOCKET client, const Request& req) {
                       render("admin_orders", {{"options", options}, {"q", q}, {"count", count}, {"rows", rows}, {"pager", pager}}));
 }
 
-// GET /admin/order?id=N: customer, items (price at purchase), payment, aur sirf allowed next statuses ke buttons
+// GET /admin/order?id=N: customer, items (price at purchase), payment, and buttons only for the allowed next statuses.
 static int admin_order_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "GET") != 0) return 405;
     string id = param(req, "id");
@@ -2526,7 +2493,7 @@ static int admin_order_page(SOCKET client, const Request& req) {
 
     vector<vector<string>> head, items, hist;
     int cid = 0;
-    MYSQL* m = get_conn(cid);               // teeno queries ek connection par
+    MYSQL* m = get_conn(cid);               // All three queries on one connection.
     if (m == nullptr) return error_page(client, req, 500, "Database error");
     bool ok = db_select_on(m, "SELECT o.order_id, o.status, o.total, o.created_at, u.name, u.email, IFNULL(p.method, ''), "
                               "IFNULL(p.status, ''), IFNULL(p.paid_at, ''), IFNULL(p.pay_detail, ''), IFNULL(p.txn_ref, '') "
@@ -2548,13 +2515,13 @@ static int admin_order_page(SOCKET client, const Request& req) {
                                                 {"subtotal", rupees(to_cents(r[3]) * atoi(r[2].c_str()))}});
     string addr;
     if (!order_address_text(o[0], addr)) return error_page(client, req, 500, "Database error");
-    string history;                         // poori history: kab, kaun sa status, kisne badla (SYSTEM / ADMIN / CUSTOMER)
+    string history;                         // Full history: when, which status, who changed it (SYSTEM / ADMIN / CUSTOMER).
     for (auto& h : hist)
         history += render("admin_history_row", {{"time", h[1]}, {"status_class", status_class(h[0])}, {"label", status_label(h[0])}, {"by", h[2]}});
     if (hist.empty()) history = render("admin_none_row", {{"message", "No history yet (order placed before tracking was added)."}});
     string pay = payment_html(o[6], o[9], o[7], o[8], o[10]);
 
-    // buttons: har possible "to" ke liye, agar db.cpp ka order_transition_ok haan kahe (wahi niyam jo server lagata hai)
+    // Buttons: for each possible "to", if order_transition_ok in db.cpp says yes (the same rule the server enforces).
     struct Next {
         const char* to;
         const char* label;
@@ -2578,7 +2545,7 @@ static int admin_order_page(SOCKET client, const Request& req) {
                                              {"history", history}, {"address", addr}, {"actions", actions}}));
 }
 
-// POST /admin/order/status (order_id, to, from = status jo admin ne page par dekha). Asli kaam db.cpp ki order_change
+// POST /admin/order/status (order_id, to, from = the status the admin saw). The real work is order_change in db.cpp.
 static int admin_order_status_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "POST") != 0) return 405;
     string id = trim(field(req, "order_id"));
@@ -2632,7 +2599,7 @@ static int admin_users_page(SOCKET client, const Request& req) {
         bool is_admin = (u[3] == "ADMIN");
         bool me = (atoi(u[0].c_str()) == req.user_id);
         string actions;
-        if (me) actions = render("admin_user_me", {});           // apna role / sessions yahan se nahi
+        if (me) actions = render("admin_user_me", {});           // Your own role and sessions are not changed from here.
         else {
             actions = render("admin_role_form", {{"id", u[0]}, {"role", is_admin ? "CUSTOMER" : "ADMIN"},
                                                  {"label", is_admin ? "Make customer" : "Make admin"}, {"back", admin_self(req)}});
@@ -2650,7 +2617,7 @@ static int admin_users_page(SOCKET client, const Request& req) {
                       render("admin_users", {{"q", q}, {"count", count}, {"rows", rows}, {"pager", admin_pager_html(base, pg, more)}}));
 }
 
-// POST /admin/users/role (user_id, role): niyam db.cpp ki role_change me (ek transaction)
+// POST /admin/users/role (user_id, role): the rules are in role_change in db.cpp (one transaction).
 static int admin_user_role_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "POST") != 0) return 405;
     string id = trim(field(req, "user_id"));
@@ -2664,14 +2631,14 @@ static int admin_user_role_page(SOCKET client, const Request& req) {
     }
     if (r.status >= 500 && r.code != "busy") return error_page(client, req, 500, "Database error");
     if (r.code == "busy") return error_page(client, req, 503, "The shop is busy right now. Please try again in a moment.");
-    return admin_redirect(client, req, "/admin/users", "", r.code);       // own_role, last_admin, same_role, no_user, not_admin
+    return admin_redirect(client, req, "/admin/users", "", r.code);       // Codes: own_role, last_admin, same_role, no_user, not_admin.
 }
 
 // ---- admin: sessions (A4) ----
 
-// admin ke liye status: Active / Logged out / Expired / Ended by admin (session_status upar customer page ke saath common hai)
+// Status for admins: Active / Logged out / Expired / Ended by admin (session_status above is shared with the customer page).
 static string admin_session_state(const vector<string>& s) {
-    return session_status(s[6], s[7], s[8]);       // is_active, expired, end_reason
+    return session_status(s[6], s[7], s[8]);       // is_active, expired, end_reason.
 }
 
 // GET /admin/sessions?show=active|all&page=
@@ -2698,7 +2665,7 @@ static int admin_sessions_page(SOCKET client, const Request& req) {
     for (auto& s : found) {
         string state = admin_session_state(s);
         bool mine = (s[0] == req.session_id);
-        // poori session id kabhi page par nahi: sirf pehle 8 characters (button bhi inhi 8 se session dhundta hai)
+        // The full session id is never on the page: only the first 8 characters (the button finds the session by those 8).
         string short_id = s[0].substr(0, 8);
         string action = state == "Active" && !mine ? render("admin_end_session_form", {{"id", short_id}, {"back", admin_self(req)}}) : (mine ? render("admin_user_me", {}) : "");
         rows += render("admin_session_row", {{"session", short_id}, {"name", s[1]}, {"email", s[2]}, {"login", s[3]}, {"activity", s[4]},
@@ -2713,7 +2680,7 @@ static int admin_sessions_page(SOCKET client, const Request& req) {
                       render("admin_sessions", {{"tabs", tabs}, {"rows", rows}, {"pager", admin_pager_html(base, pg, more)}}));
 }
 
-// POST /admin/sessions/end (session_id = pehle 8 hex characters, ya poori 64): session band, end_reason 'FORCED'
+// POST /admin/sessions/end (session_id = first 8 hex characters, or all 64): ends the session, end_reason 'FORCED'.
 static int admin_session_end_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "POST") != 0) return 405;
     string sid = trim(field(req, "session_id"));
@@ -2722,7 +2689,7 @@ static int admin_session_end_page(SOCKET client, const Request& req) {
         if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) hex = false;
     if (!hex || (sid.size() != 8 && sid.size() != 64)) return admin_redirect(client, req, "/admin/sessions", "", "bad_request");
 
-    // 8 characters se EK hi active session milna chahiye (poori id page par kabhi nahi dikhai)
+    // The 8 characters must match exactly ONE active session (the full id is never shown).
     vector<vector<string>> found;
     if (!db_select("SELECT session_id FROM user_sessions WHERE session_id LIKE ? AND is_active = 1 LIMIT 2", {sid + "%"}, found))
         return error_page(client, req, 500, "Database error");
@@ -2739,7 +2706,7 @@ static int admin_session_end_page(SOCKET client, const Request& req) {
     return admin_redirect(client, req, "/admin/sessions", "session_ended", "");
 }
 
-// POST /admin/users/logout-all (user_id): us user ke saare active sessions band
+// POST /admin/users/logout-all (user_id): ends all of that user's active sessions.
 static int admin_user_logout_all_page(SOCKET client, const Request& req) {
     if (admin_method(client, req, "POST") != 0) return 405;
     string id = trim(field(req, "user_id"));
@@ -2766,7 +2733,7 @@ static int admin_logs_page(SOCKET client, const Request& req) {
     if (!worker.empty() && !is_number(worker)) return admin_problem(client, req, 400, "Logs", "Bad worker filter.");
     if (!cls.empty() && cls != "2xx" && cls != "3xx" && cls != "4xx" && cls != "5xx") return admin_problem(client, req, 400, "Logs", "Bad status filter.");
 
-    // SQL ke tukde fixed; worker aur path sirf args me. Status class ke number hamare apne (2xx -> 200..299)
+    // SQL pieces are fixed; worker and path only in args. The status class numbers are our own (2xx -> 200..299).
     string sql = "SELECT l.created_at, l.method, l.path, l.status, l.latency_ms, l.queue_wait_ms, l.worker_id, "
                  "IFNULL(CONCAT(u.name, ' (#', l.user_id, ')'), '-') FROM request_logs l LEFT JOIN users u ON u.user_id = l.user_id WHERE 1=1";
     vector<string> args;
@@ -2786,7 +2753,7 @@ static int admin_logs_page(SOCKET client, const Request& req) {
 
     vector<vector<string>> logs, workers, actions;
     int cid = 0;
-    MYSQL* m = get_conn(cid);               // teeno queries ek connection par
+    MYSQL* m = get_conn(cid);               // All three queries on one connection.
     if (m == nullptr) return error_page(client, req, 500, "Database error");
     bool ok = db_select_on(m, sql, args, logs) &&
               db_select_on(m, "SELECT worker_id, COUNT(*), AVG(latency_ms) FROM request_logs "
@@ -2796,7 +2763,7 @@ static int admin_logs_page(SOCKET client, const Request& req) {
     put_conn(cid);
     if (!ok || !cols_ok(logs, 8) || !cols_ok(workers, 3) || !cols_ok(actions, 4)) return error_page(client, req, 500, "Database error");
 
-    // worker bars: sabse zyada wale ka 100%
+    // Worker bars: the busiest one is 100%.
     long long top = 0;
     for (auto& w : workers) top = max(top, atoll(w[1].c_str()));
     string worker_rows;
@@ -2832,7 +2799,7 @@ static int admin_logs_page(SOCKET client, const Request& req) {
                                             {"action_rows", action_rows}}), head);
 }
 
-// /admin ... : guard, phir path ke hisaab se page
+// /admin ... : guard first, then the page by path.
 static int admin_route(SOCKET client, const Request& req) {
     int guard = require_admin(client, req);
     if (guard != 0) return guard;
@@ -2860,16 +2827,22 @@ static int admin_route(SOCKET client, const Request& req) {
     return error_page(client, req, 404, "404 Not Found");
 }
 
-// path ke hisaab se page bhejo; status code return karta hai
+// The debug routes (/test, /slow, /dbtest, /dbslow) exist only when the environment variable DEBUG_ROUTES is 1.
+static bool debug_routes_on() {
+    const char* v = getenv("DEBUG_ROUTES");
+    return v != nullptr && string(v) == "1";
+}
+
+// Sends the page for the path; returns the status code.
 int route(SOCKET client, Request& req) {
-    // /metrics ko login/session ki zaroorat nahi (aur DB ki bhi nahi): load_user se pehle
+    // /metrics needs no login or session (and no DB): handled before load_user.
     if (req.path == "/metrics") return metrics_page(client, req, false);
     if (req.path == "/metrics.json") return metrics_page(client, req, true);
 
-    load_user(req);                     // pehle dekho kaun hai (har request par)
+    load_user(req);                     // First find out who it is (on every request).
     const string& path = req.path;
 
-    if (path == "/admin" || path.rfind("/admin/", 0) == 0) return admin_route(client, req);   // guard andar
+    if (path == "/admin" || path.rfind("/admin/", 0) == 0) return admin_route(client, req);   // The guard is inside admin_route.
 
     if (path == "/") return home_page(client, req);
     if (path == "/products") return products_page(client, req);
@@ -2892,16 +2865,16 @@ int route(SOCKET client, Request& req) {
     if (path == "/orders") return orders_page(client, req);
     if (path == "/order") return order_page(client, req);
     if (path == "/order/cancel") return order_cancel_page(client, req);
-    if (path == "/test") return test_page(client, req);
 
-    // neeche ke do route sirf testing ke liye
-    if (path == "/slow") {
+    // Debug routes: without DEBUG_ROUTES=1 they are not matched and fall through to 404.
+    if (path == "/test" && debug_routes_on()) return test_page(client, req);
+    if (path == "/slow" && debug_routes_on()) {
         Sleep(3000);
         send_response(client, 200, HTML, render("plain", {{"message", "done"}}), with_cookie_fix(req, ""));
         return 200;
     }
-    if (path == "/dbtest") return db_test_page(client, req, "Products in database", "SELECT COUNT(*) FROM products");
-    if (path == "/dbslow") return db_test_page(client, req, "Slept 2 seconds", "SELECT SLEEP(2)");
+    if (path == "/dbtest" && debug_routes_on()) return db_test_page(client, req, "Products in database", "SELECT COUNT(*) FROM products");
+    if (path == "/dbslow" && debug_routes_on()) return db_test_page(client, req, "Slept 2 seconds", "SELECT SLEEP(2)");
 
     return error_page(client, req, 404, "404 Not Found");
 }
