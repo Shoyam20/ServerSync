@@ -1,4 +1,4 @@
-// main.cpp - program start; database, server aur workers start/stop karta hai
+// main.cpp - starts the database, server and background threads, and stops them in reverse order.
 // Owner: Shoyam20
 #include "common.h"
 using namespace std;
@@ -6,11 +6,11 @@ using namespace std;
 int main() {
     log_msg("ServerSync starting...");
 
-    if (!load_templates(TEMPLATE_DIR)) {    // templates ke bina koi page ban hi nahi sakta
+    if (!load_templates(TEMPLATE_DIR)) {    // Pages cannot be built without templates.
         log_msg("Cannot start: templates are missing. Run the server from the project folder (it needs templates/).");
         return 1;
     }
-    if (!init_db()) {                   // DB nahi chala to server shuru hi nahi karte
+    if (!init_db()) {                   // Without the database the server does not start.
         log_msg("Cannot start without the database. Fix db.conf / MySQL and try again.");
         return 1;
     }
@@ -18,14 +18,14 @@ int main() {
         close_db();
         return 1;
     }
-    start_logger();     // request_logs ka batch writer: workers se pehle, taaki pehli request ka log bhi aaye
+    start_logger();     // Starts before the workers so even the first request is logged.
     start_workers();
-    start_cleanup();    // expired sessions ki safai (DB use karta hai)
-    runServer();        // Ctrl+C aane tak chalta hai
-    stop_workers();     // pehle workers (wo logs push karte hain), phir cleanup
+    start_cleanup();    // Cleanup and delivery threads (both use the database).
+    runServer();        // Blocks here until Ctrl+C.
+    stop_workers();     // Workers first (they push logs), then the other threads.
     stop_cleanup();
-    stop_logger();      // ab koi naya log nahi aayega: bacha hua sab DB me flush karke logger band
-    close_db();         // sabse aakhir me DB connections (logger aur cleanup unhe use karte hain)
+    stop_logger();      // No new logs can arrive now: flush the rest, then stop.
+    close_db();         // Last, because the logger, cleanup and delivery threads use the database.
     stopServer();
 
     log_msg("ServerSync stopped.");
