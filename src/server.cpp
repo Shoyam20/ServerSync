@@ -1,6 +1,6 @@
-// server.cpp - Winsock socket code: accept loop, recv/send, request parsing, static files (/static/...)
+// server.cpp - Winsock sockets: accept loop, reading and parsing requests, sending replies, static files.
 // Owner: Aradhana
-#include <winsock2.h>   // windows.h se pehle aana chahiye
+#include <winsock2.h>   // Must come before windows.h.
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
@@ -9,25 +9,25 @@
 #include "common.h"
 using namespace std;
 
-// global socket, taaki Ctrl+C handler isse band kar sake
+// Global so the Ctrl+C handler can close it.
 static SOCKET server = INVALID_SOCKET;
 
-// listening socket band karo (dobara call karna safe hai)
+// Safe to call twice.
 static void closeServerSocket() {
     if (server != INVALID_SOCKET) {
         SOCKET s = server;
         server = INVALID_SOCKET;
-        closesocket(s);   // Windows me close() nahi, closesocket() hota hai
+        closesocket(s);   // Windows uses closesocket(), not close().
     }
 }
 
-// Ctrl+C aane par socket band karo, accept() fail hoga aur loop khatam
+// Ctrl+C closes the socket, so accept() fails and the loop ends.
 static BOOL WINAPI onCtrlC(DWORD) {
     closeServerSocket();
     return TRUE;
 }
 
-// "123" jaise text ko number me badlo; galat ho to false
+// Digits only, at most 9 (so it cannot overflow); false if invalid.
 static bool to_number(const string& s, size_t& num) {
     if (s.empty() || s.size() > 9) return false;
     num = 0;
@@ -38,13 +38,11 @@ static bool to_number(const string& s, size_t& num) {
     return true;
 }
 
-// text ko lowercase karo (header naam ke liye)
 static string to_lower(string s) {
     for (char& c : s) c = (char)tolower((unsigned char)c);
     return s;
 }
 
-// aage-peeche ke space, tab, \r, \n hatao
 string trim(const string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
     if (a == string::npos) return "";
@@ -52,7 +50,6 @@ string trim(const string& s) {
     return s.substr(a, b - a + 1);
 }
 
-// hex digit ka value (0-15), galat ho to -1
 static int hex_value(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -60,7 +57,7 @@ static int hex_value(char c) {
     return -1;
 }
 
-// URL decode: "+" = space, "%20" = byte 0x20; galat %xx ya %00 ho to false
+// "+" is a space, %xx is a byte; a bad %xx or %00 is rejected.
 static bool url_decode(const string& in, string& out) {
     out = "";
     for (size_t i = 0; i < in.size(); i++) {
@@ -68,12 +65,12 @@ static bool url_decode(const string& in, string& out) {
         if (c == '+') {
             out += ' ';
         } else if (c == '%') {
-            if (i + 2 >= in.size()) return false;   // % ke baad do hex digit chahiye
+            if (i + 2 >= in.size()) return false;   // % must be followed by two hex digits.
             int hi = hex_value(in[i + 1]);
             int lo = hex_value(in[i + 2]);
             if (hi < 0 || lo < 0) return false;
             char b = (char)(hi * 16 + lo);
-            if (b == 0) return false;               // NUL byte nahi chalega
+            if (b == 0) return false;               // Refuse NUL bytes (they can cut strings short).
             out += b;
             i += 2;
         } else {
@@ -83,7 +80,7 @@ static bool url_decode(const string& in, string& out) {
     return true;
 }
 
-// "cat=3&q=lap" ko params map me todo (naam aur value dono decode hote hain)
+// Splits a=1&b=2 into a map; names and values are URL-decoded.
 static bool parse_query(const string& query, map<string, string>& params) {
     size_t pos = 0;
     while (pos < query.size()) {
@@ -103,7 +100,7 @@ static bool parse_query(const string& query, map<string, string>& params) {
     return true;
 }
 
-// request line padho: "GET /path HTTP/1.1"
+// Parses the request line, e.g. GET /path HTTP/1.1.
 static bool parse_request_line(const string& line, Request& req) {
     size_t a = line.find(' ');
     if (a == string::npos) return false;
@@ -111,26 +108,25 @@ static bool parse_request_line(const string& line, Request& req) {
     if (b == string::npos) return false;
 
     req.method = line.substr(0, a);
-    req.target = line.substr(a + 1, b - a - 1);     // jaisa aaya waisa: /products?cat=3
+    req.target = line.substr(a + 1, b - a - 1);     // Kept exactly as received, e.g. /products?cat=3.
     req.version = line.substr(b + 1);
 
-    // path aur ?query alag karo
     size_t q = req.target.find('?');
     req.path = req.target.substr(0, q);
     if (q != string::npos && !parse_query(req.target.substr(q + 1), req.params)) return false;
 
     if (req.method.empty()) return false;
     for (char c : req.method)
-        if (c < 'A' || c > 'Z') return false;        // method sirf capital letters
+        if (c < 'A' || c > 'Z') return false;        // Method: capital letters only.
     if (req.path.empty() || req.path[0] != '/') return false;
     for (char c : req.target)
-        if (c <= 32 || c == 127) return false;       // control char / space nahi chalega
+        if (c <= 32 || c == 127) return false;       // No control characters or spaces.
     if (req.version.compare(0, 5, "HTTP/") != 0) return false;
     if (req.version.find(' ') != string::npos) return false;
     return true;
 }
 
-// Cookie header "a=1; session_id=xyz; b=2" ko cookies map me todo
+// Splits "a=1; session_id=xyz" into a map.
 static void parse_cookies(const string& header, map<string, string>& cookies) {
     size_t pos = 0;
     while (pos < header.size()) {
@@ -145,13 +141,12 @@ static void parse_cookies(const string& header, map<string, string>& cookies) {
     }
 }
 
-// head = request line + headers (aakhri blank line ke bina); method, path, version, headers, cookies bharta hai
+// head = request line + headers, without the final blank line.
 static bool parse_request(const string& head, Request& req) {
     size_t eol = head.find("\r\n");
     if (eol == string::npos) eol = head.size();
     if (!parse_request_line(head.substr(0, eol), req)) return false;
 
-    // har header line: "Name: value"
     size_t pos = eol + 2;
     while (pos < head.size()) {
         size_t e = head.find("\r\n", pos);
@@ -171,41 +166,41 @@ static bool parse_request(const string& head, Request& req) {
     return true;
 }
 
-// read_request ke result codes (0 = theek, -1 = client chala gaya, baaki HTTP status)
+// read_request results: 0 ok, -1 client left, otherwise an HTTP status.
 const int READ_OK = 0;
 const int READ_GONE = -1;
 
-// recv se kuch bytes data me jodo; READ_OK, READ_GONE ya 408 (timeout) return karta hai
+// Appends bytes from recv; returns READ_OK, READ_GONE or 408 on timeout.
 static int recv_more(SOCKET client, string& data) {
     char buf[4096];
-    int n = recv(client, buf, sizeof(buf), 0);   // SO_RCVTIMEO ki wajah se zyada der nahi ruka rahega
+    int n = recv(client, buf, sizeof(buf), 0);   // The receive timeout (SO_RCVTIMEO) stops this waiting forever.
     if (n == SOCKET_ERROR) {
         if (WSAGetLastError() == WSAETIMEDOUT) return 408;
         log_msg("recv failed: " + to_string(WSAGetLastError()));
         return READ_GONE;
     }
-    if (n == 0) return READ_GONE;                // client ne connection band kar diya
+    if (n == 0) return READ_GONE;                // recv returning 0 means the client closed the connection.
     data.append(buf, n);
     return READ_OK;
 }
 
-// client se ek poori request padho; READ_OK, READ_GONE, 400 (galat/badi) ya 408 (timeout) return karta hai
+// Reads one full request: READ_OK, READ_GONE, 400 (bad or too big) or 408 (timeout).
 static int read_request(SOCKET client, Request& req) {
-    // TCP stream hai, isliye "\r\n\r\n" milne tak recv ka loop
+    // TCP is a byte stream: keep reading until the blank line that ends the headers.
     string raw;
     size_t end;
     while ((end = raw.find("\r\n\r\n")) == string::npos) {
-        if (raw.size() > MAX_HEADER) return 400;     // headers bahut bade
+        if (raw.size() > MAX_HEADER) return 400;     // Header size limit.
         int r = recv_more(client, raw);
         if (r != READ_OK) return r;
     }
     if (end + 4 > MAX_HEADER) return 400;
 
-    string body = raw.substr(end + 4);               // headers ke saath aaya body ka hissa
+    string body = raw.substr(end + 4);               // Body bytes that arrived together with the headers.
     if (!parse_request(raw.substr(0, end), req)) return 400;
 
-    // body ki length Content-Length se pata chalti hai
-    if (req.headers.count("transfer-encoding")) return 400;     // chunked abhi support nahi
+    // Body size comes from Content-Length.
+    if (req.headers.count("transfer-encoding")) return 400;     // Chunked bodies are not supported.
     size_t len = 0;
     if (req.headers.count("content-length")) {
         if (!to_number(req.headers["content-length"], len)) return 400;
@@ -218,7 +213,7 @@ static int read_request(SOCKET client, Request& req) {
     }
     req.body = body.substr(0, len);
 
-    // POST form (a=1&b=2) ko bhi query jaise hi decode karo
+    // POST forms are decoded like a query string.
     if (req.method == "POST" &&
         to_lower(req.headers["content-type"]).compare(0, 33, "application/x-www-form-urlencoded") == 0) {
         if (!parse_query(req.body, req.form)) return 400;
@@ -226,7 +221,6 @@ static int read_request(SOCKET client, Request& req) {
     return READ_OK;
 }
 
-// status code ka naam
 static string reason(int status) {
     if (status == 200) return "OK";
     if (status == 302) return "Found";
@@ -242,9 +236,8 @@ static string reason(int status) {
     return "Unknown";
 }
 
-// poora data bhejo
 static void sendAll(SOCKET client, const string& res) {
-    // send kam bytes bhi bhej sakta hai, isliye loop
+    // send() may send fewer bytes than asked, so loop.
     size_t sent = 0;
     while (sent < res.size()) {
         int n = send(client, res.c_str() + sent, (int)(res.size() - sent), 0);
@@ -256,11 +249,11 @@ static void sendAll(SOCKET client, const string& res) {
     }
 }
 
-// reply banao aur bhejo: status line, headers, blank line, body
-// extra = optional extra header lines (default common.h me), har line "\r\n" par khatam (jaise "Retry-After: 2\r\n")
+// Builds and sends: status line, headers, blank line, body.
+// extra = more header lines, each ending in \r\n (e.g. "Retry-After: 2\r\n").
 void send_response(SOCKET client, int status, const string& type, const string& body,
                    const string& extra) {
-    // Content-Length body ke bytes ke barabar hona chahiye
+    // Content-Length must equal the body size in bytes.
     string res = "HTTP/1.1 " + to_string(status) + " " + reason(status) + "\r\n"
                  "Content-Type: " + type + "\r\n"
                  "Content-Length: " + to_string(body.size()) + "\r\n"
@@ -269,12 +262,11 @@ void send_response(SOCKET client, int status, const string& type, const string& 
     sendAll(client, res);
 }
 
-// ---- static files: public/ ki files /static/<naam> par ----
-// Saari files startup par ek baar memory me aa jaati hain (load_static_files), isliye request ke waqt disk nahi padhte.
-// Isi wajah se path trick (../db.conf) bhi kaam nahi karta: hum disk par path banate hi nahi, sirf is map me naam dhundhte hain.
+// ---- static files: /static/<name>, loaded into memory once at startup (no disk reads) ----
+// The URL is never used as a disk path, only looked up in this map, so ../ tricks cannot work.
 static map<string, StaticFile> static_files;
 
-// extension se Content-Type; "" = unknown (aisi file load hi nahi hoti, to 404)
+// Content-Type from the extension; "" = unknown type (not loaded, so 404).
 static string static_type(const string& name) {
     size_t dot = name.rfind('.');
     if (dot == string::npos) return "";
@@ -284,11 +276,11 @@ static string static_type(const string& name) {
     if (ext == ".js") return "application/javascript; charset=utf-8";
     if (ext == ".svg") return "image/svg+xml";
     if (ext == ".png") return "image/png";
-    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";     // product ki photos (public/images/products/<id>.jpg)
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";     // Product photos (public/images/products/<id>.jpg).
     return "";
 }
 
-// file ka naam safe hai? (sirf a-z A-Z 0-9 . _ - aur folder ke liye /)
+// Only a-z A-Z 0-9 . _ - and / (for folders).
 static bool safe_name_chars(const string& name) {
     for (char c : name) {
         bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
@@ -298,7 +290,7 @@ static bool safe_name_chars(const string& name) {
     return true;
 }
 
-// dir ki saari files (folders ke andar bhi) memory me; startup par ek baar. Return: kitni files load huin
+// Loads every file under dir (subfolders too) into memory once at startup; returns how many.
 int load_static_files(const string& dir) {
     static_files.clear();
     error_code ec;
@@ -309,18 +301,18 @@ int load_static_files(const string& dir) {
 
     for (auto& entry : filesystem::recursive_directory_iterator(dir, ec)) {
         if (!entry.is_regular_file()) continue;
-        string name = filesystem::relative(entry.path(), dir).generic_string();     // hamesha "/" se
+        string name = filesystem::relative(entry.path(), dir).generic_string();     // Always use "/" as the separator.
         string type = static_type(name);
         if (type.empty() || !safe_name_chars(name) || name.find("..") != string::npos) {
             log_msg("static: skipped '" + name + "' (unknown type or unsafe name)");
             continue;
         }
-        if (entry.file_size() > 2 * 1024 * 1024) {              // memory me rakhni hai: 2 MB se badi nahi
+        if (entry.file_size() > 2 * 1024 * 1024) {              // Files stay in memory: 2 MB maximum each.
             log_msg("static: skipped '" + name + "' (bigger than 2 MB)");
             continue;
         }
 
-        ifstream f(entry.path(), ios::binary);                  // binary: png ke bytes jaise ke waise
+        ifstream f(entry.path(), ios::binary);                  // Binary mode: bytes are read unchanged (images).
         StaticFile sf;
         sf.type = type;
         sf.data.assign(istreambuf_iterator<char>(f), istreambuf_iterator<char>());
@@ -330,8 +322,8 @@ int load_static_files(const string& dir) {
     return (int)static_files.size();
 }
 
-// "/static/" ke baad ka naam -> file. nullptr = 404.
-// Mana hai: khali naam, ".." (upar ke folder), "\" (Windows folder), aur "/" se shuru hone wala naam
+// Name after /static/ -> file, or nullptr (404).
+// Refused: empty name, "..", backslash, and names that start with "/".
 const StaticFile* find_static(const string& name) {
     if (name.empty()) return nullptr;
     if (name.find("..") != string::npos) return nullptr;
@@ -341,24 +333,24 @@ const StaticFile* find_static(const string& name) {
     return it == static_files.end() ? nullptr : &it->second;
 }
 
-// GET /static/<naam>. Status return karta hai. Disk nahi padhta, memory se bhejta hai
+// GET /static/<name>, served from memory (no disk read). Returns the status.
 static int serve_static(SOCKET client, const Request& req) {
     if (req.method != "GET") {
         send_response(client, 405, "text/plain; charset=utf-8", "Method Not Allowed", "Allow: GET\r\n");
         return 405;
     }
-    const StaticFile* f = find_static(req.path.substr(8));      // "/static/" ke 8 characters hatao
+    const StaticFile* f = find_static(req.path.substr(8));      // Skip the 8 characters of "/static/".
     if (f == nullptr) {
         send_response(client, 404, "text/plain; charset=utf-8", "Not Found");
         return 404;
     }
-    // browser ek ghante tak dobara nahi mangega
+    // The browser may cache it for one hour.
     send_response(client, 200, f->type, f->data, "Cache-Control: max-age=3600\r\n");
     return 200;
 }
 
-// ek client ko handle karo: request padho, route karo, band karo. Return: kya jawab gaya (worker log/metrics banata hai).
-// Har request ki console line sirf VERBOSE_LOG = 1 par; baaki sab /metrics aur request_logs table me hai
+// Handles one client: read, route, close. Returns what was answered (for the worker's log and metrics).
+// Per-request console lines only print when VERBOSE_LOG = 1.
 RequestInfo handleClient(const ClientJob& job) {
     SOCKET client = job.sock;
     RequestInfo info;
@@ -367,7 +359,7 @@ RequestInfo handleClient(const ClientJob& job) {
     int r = read_request(client, req);
 
     if (r == READ_OK) {
-        // /static/... login/DB ki zaroorat nahi: seedha memory se (route() aur load_user se pehle)
+        // Static files need no login or database: served before route().
         bool is_static = req.path.compare(0, 8, "/static/") == 0;
         info.status = is_static ? serve_static(client, req) : route(client, req);
         info.method = req.method;
@@ -377,27 +369,27 @@ RequestInfo handleClient(const ClientJob& job) {
     } else if (r == 408) {
         send_response(client, 408, "text/html; charset=utf-8", render_error_page("408 Request Timeout"));
         info.status = 408;
-        info.method = "-";              // request poori padhi hi nahi gayi
+        info.method = "-";              // The request was never fully read.
         info.path = "-";
         log_msg_verbose("timeout -> 408");
     } else if (r == 400) {
         send_response(client, 400, "text/html; charset=utf-8", render_error_page("400 Bad Request"));
         info.status = 400;
-        info.method = req.method.empty() ? "-" : req.method;   // request line theek thi to method/path mil jaate hain
+        info.method = req.method.empty() ? "-" : req.method;   // If the request line was valid, method and path are known.
         info.path = req.path.empty() ? "-" : req.path;
         log_msg_verbose("bad request -> 400");
     } else {
-        log_msg_verbose("client left early");   // client chala gaya, reply bhejne ka fayda nahi (status 0 = log nahi)
+        log_msg_verbose("client left early");   // Client left: nothing to send (status 0 = not logged).
     }
-    closesocket(client);   // is client ka connection band
+    closesocket(client);
     return info;
 }
 
 bool startServer() {
     SetConsoleCtrlHandler(onCtrlC, TRUE);
-    load_static_files(STATIC_DIR);      // workers shuru hone se pehle: baad me map sirf padhi jaati hai (mutex nahi chahiye)
+    load_static_files(STATIC_DIR);      // Loaded before the workers start, so the map is only read later (no mutex needed).
 
-    // WSAStartup: koi bhi socket call se pehle zaroori, version 2.2 maango
+    // WSAStartup must run before any socket call (version 2.2).
     WSADATA wsa;
     int r = WSAStartup(MAKEWORD(2, 2), &wsa);
     if (r != 0) {
@@ -405,7 +397,7 @@ bool startServer() {
         return false;
     }
 
-    // socket: OS se endpoint maango (AF_INET = IPv4, SOCK_STREAM = TCP)
+    // socket(): IPv4 (AF_INET), TCP (SOCK_STREAM).
     server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server == INVALID_SOCKET) {
         log_msg("socket failed: " + to_string(WSAGetLastError()));
@@ -413,11 +405,11 @@ bool startServer() {
         return false;
     }
 
-    // SO_REUSEADDR: restart par port turant dobara use ho sake
+    // Lets the port be reused right after a restart.
     BOOL yes = TRUE;
     setsockopt(server, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
-    // bind: socket ko port se jodo (INADDR_ANY = saare network cards, htons = network byte order)
+    // INADDR_ANY = all network cards; htons = network byte order.
     sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -429,7 +421,7 @@ bool startServer() {
         return false;
     }
 
-    // listen: socket ko "connections ka wait" mode me daalo (backlog queue OS rakhta hai)
+    // Start waiting for connections; the OS keeps the backlog.
     if (listen(server, SOMAXCONN) == SOCKET_ERROR) {
         log_msg("listen failed: " + to_string(WSAGetLastError()));
         closeServerSocket();
@@ -441,13 +433,13 @@ bool startServer() {
     return true;
 }
 
-// queue full: wait mat karo, turant 503 do aur connection band
+// Queue full: do not wait, answer 503 at once.
 static void reject_client(SOCKET client) {
     send_response(client, 503, "text/html; charset=utf-8", render_error_page("Server busy, try again"),
                   "Retry-After: 2\r\n");
 
-    // unread request ke saath closesocket karne par Windows RST bhejta hai aur client ka 503 kho sakta hai
-    // isliye pehle FIN bhejo, request ek baar padh lo (sirf 100 ms tak ruko), phir band karo
+    // Closing with unread data makes Windows send RST, and the client may lose the 503.
+    // So send FIN first, read the request briefly (max 100 ms), then close.
     shutdown(client, SD_SEND);
     DWORD ms = 100;
     setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
@@ -458,28 +450,28 @@ static void reject_client(SOCKET client) {
 
 void runServer() {
     while (true) {
-        // accept: client aane tak ruko, phir us client ka naya socket milta hai (aur uska address)
+        // accept() sleeps until a client connects and returns a new socket for it.
         sockaddr_in from = {};
         int from_len = sizeof(from);
         SOCKET client = accept(server, (sockaddr*)&from, &from_len);
-        long long accepted = now_us();             // accept hote hi time note: queue_wait_ms / latency_ms yahin se
+        long long accepted = now_us();             // Note the time now: queue wait and latency are measured from here.
         if (client == INVALID_SOCKET) {
-            if (server == INVALID_SOCKET) break;   // Ctrl+C se band hua, nikal jao
+            if (server == INVALID_SOCKET) break;   // Ctrl+C closed the socket: stop.
             log_msg("accept failed: " + to_string(WSAGetLastError()));
             continue;
         }
-        // slow client poora server na roke, isliye recv par timeout (Windows me DWORD, milliseconds)
+        // A slow client must not block a worker forever: receive timeout (ms).
         DWORD ms = RECV_TIMEOUT_MS;
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
 
-        // client ka IPv4 "a.b.c.d" (network byte order me 4 bytes). /metrics sirf 127.0.0.1 ke liye hai
+        // IPv4 as a.b.c.d; /metrics is only allowed from 127.0.0.1.
         const unsigned char* b = (const unsigned char*)&from.sin_addr;
         ClientJob job;
         job.sock = client;
         job.accept_us = accepted;
         job.ip = to_string(b[0]) + "." + to_string(b[1]) + "." + to_string(b[2]) + "." + to_string(b[3]);
 
-        // handle karna worker threads ka kaam hai; hum sirf queue me daalte hain
+        // Workers do the handling; we only queue.
         if (!push_client(job)) {
             reject_client(client);
             log_msg("queue full -> 503 (rejected so far: " + to_string(metric_rejected()) + ")");
@@ -489,6 +481,6 @@ void runServer() {
 
 void stopServer() {
     closeServerSocket();
-    // WSACleanup: WSAStartup ka jodi, Winsock ka kaam khatam
+    // Pairs with WSAStartup.
     WSACleanup();
 }

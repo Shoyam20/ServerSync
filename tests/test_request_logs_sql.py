@@ -22,7 +22,7 @@ def sql(q, **kw):
     return db.run(q, "ecommerce_db", **kw)
 
 schema = read(r"sql\ecommerce_db.sql")
-alter = read(r"sql\alter_003_request_logs.sql")
+alter = read(r"sql\migrations\alter_003_request_logs.sql")
 work = tempfile.mkdtemp(prefix="serversync_rl_")
 try:
     exe = os.path.join(work, "request_logs_check.exe")

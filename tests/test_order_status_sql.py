@@ -90,7 +90,7 @@ try:
     failed, err = order("CONFIRMED", 7)
     check("OLD database rejects 'CONFIRMED' (the earlier failure)", failed and "chk_orders_status" in err, err[:80])
 
-    db.run(read(r"sql\alter_002_order_status_values.sql"))
+    db.run(read(r"sql\migrations\alter_002_order_status_values.sql"))
     rows = sql("SELECT status, COUNT(*) FROM orders GROUP BY status ORDER BY status").replace("\n", "|")
     check("ALTER keeps all data and renames nothing (PLACED stays PLACED)",
           rows == "CANCELLED\t1|DELIVERED\t1|PLACED\t3|SHIPPED\t1", rows)
