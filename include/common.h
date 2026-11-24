@@ -1,5 +1,3 @@
-// common.h - settings, shared structs and the function declarations every module uses.
-// Owner: Shoyam20
 #pragma once
 #include <winsock2.h>   // Must come before windows.h; gives the SOCKET type.
 #include <string>
@@ -280,6 +278,7 @@ struct RoleResult {
     string code = "db_error";       // Flash code on 400/403/404: own_role, last_admin, same_role, no_user, not_admin, bad_request.
     string from;                    // The old role (for logs).
 };
+
 RoleResult role_change(int admin_id, int user_id, const string& new_role);
 // Changes the password only if the old one is right; also ends all the user's other sessions (end_reason 'LOGOUT'),
 // keeping keep_session. All in one transaction.
