@@ -1,5 +1,4 @@
-// pages.cpp - route(), template loading and render(), the page layout and the helpers every page file shares (declared in pages.h).
-// Owner: Ashutosh
+
 #include <winsock2.h>
 #include <windows.h>
 #include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
