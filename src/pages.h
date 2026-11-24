@@ -21,6 +21,7 @@ string with_cookie_fix(const Request& req, const string& extra);
 string flash_box(const string& kind, const string& message_html);
 string flash_text(const string& kind, const string& text);
 string page(const Request& req, const string& title, const string& content, const string& head_extra = "", const string& flash = "", bool interactive = true, bool allow_db = true);
+
 int send_page(SOCKET client, const Request& req, int status, const string& title, const string& content, const string& extra = "", const string& flash = "");
 string error_content(const string& msg, const string& detail_html = "");
 int error_page(SOCKET client, const Request& req, int status, const string& msg);
@@ -33,6 +34,7 @@ string status_class(const string& status);
 string status_label(const string& status);
 string stock_html(const string& stock);
 bool is_number(const string& s);
+
 string escape_like(const string& s);
 string param(const Request& req, const string& key);
 string field(const Request& req, const string& key);
