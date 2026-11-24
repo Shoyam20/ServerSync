@@ -1,5 +1,4 @@
-// main.cpp - starts the database, server and background threads, and stops them in reverse order.
-// Owner: Shoyam20
+
 #include "common.h"
 using namespace std;
 
