@@ -11,7 +11,6 @@ using namespace std;
 
 // ---- forms ----
 
-
 // ---- password policy ----
 // The rules live only in check_password; app.js just shows them live. No DB CHECK: they apply to typed passwords, not hashes.
 static const char* COMMON_PW[] = {"password@123", "admin@123", "qwerty@123", "welcome@123", "abcd@1234", "password@1234", "password1!",
@@ -20,7 +19,8 @@ static const char* COMMON_PW[] = {"password@123", "admin@123", "qwerty@123", "we
                                   "letmein@123", "changeme@123", "iloveyou@123", "user@1234", "master@123", "monkey@123",
                                   "dragon@123", "login@1234", "hello@1234"};
 
-string lower_ascii(string t) {
+string lower_ascii(string t) 
+{
     for (char& c : t) c = (char)tolower((unsigned char)c);
     return t;
 }
