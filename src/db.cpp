@@ -1,5 +1,3 @@
-// db.cpp - MySQL connection pool, prepared-statement helpers, and every transaction (checkout, orders, addresses, roles, passwords).
-// Owner: Shoyam20
 #include <winsock2.h>
 #include <mysql.h>
 #include <cstring>
