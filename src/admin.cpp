@@ -1,5 +1,4 @@
-// admin.cpp - /metrics and the admin panel (dashboard, products, categories, orders, users, sessions, logs).
-// Owner: Ashutosh
+
 #include <winsock2.h>
 #include <windows.h>
 #include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
