@@ -95,7 +95,7 @@ struct ClientJob {
     string ip;
 };
 
-// What handleClient did: which request got which answer (the worker builds the log and metrics from it).
+// What handle_client did: which request got which answer (the worker builds the log and metrics from it).
 struct RequestInfo {
     string method;
     string path;                    // Without the query.
@@ -176,10 +176,10 @@ struct PaymentInfo {
 };
 
 // ---- server.cpp ----
-bool startServer();                 // WSAStartup, socket, bind, listen.
-void runServer();                   // Accept loop: accepts clients and puts them in the queue.
-void stopServer();                  // Close the socket, WSACleanup.
-RequestInfo handleClient(const ClientJob& job);   // One client: read, parse, route, send, close. Returns what happened.
+bool start_server();                 // WSAStartup, socket, bind, listen.
+void run_server();                   // Accept loop: accepts clients and puts them in the queue.
+void stop_server();                  // Close the socket, WSACleanup.
+RequestInfo handle_client(const ClientJob& job);   // One client: read, parse, route, send, close. Returns what happened.
 string trim(const string& s);
 int load_static_files(const string& dir);                 // Loads every file of dir into memory (once at startup); returns how many.
 const StaticFile* find_static(const string& name);        // "style.css" -> file, or nullptr (404) for a wrong or unknown path.
