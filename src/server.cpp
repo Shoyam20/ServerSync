@@ -13,7 +13,7 @@ using namespace std;
 static SOCKET server = INVALID_SOCKET;
 
 // Safe to call twice.
-static void closeServerSocket() {
+static void close_server_socket() {
     if (server != INVALID_SOCKET) {
         SOCKET s = server;
         server = INVALID_SOCKET;
@@ -22,8 +22,8 @@ static void closeServerSocket() {
 }
 
 // Ctrl+C closes the socket, so accept() fails and the loop ends.
-static BOOL WINAPI onCtrlC(DWORD) {
-    closeServerSocket();
+static BOOL WINAPI on_ctrl_c(DWORD) {
+    close_server_socket();
     return TRUE;
 }
 
@@ -236,7 +236,7 @@ static string reason(int status) {
     return "Unknown";
 }
 
-static void sendAll(SOCKET client, const string& res) {
+static void send_all(SOCKET client, const string& res) {
     // send() may send fewer bytes than asked, so loop.
     size_t sent = 0;
     while (sent < res.size()) {
@@ -259,7 +259,7 @@ void send_response(SOCKET client, int status, const string& type, const string& 
                  "Content-Length: " + to_string(body.size()) + "\r\n"
                  "Connection: close\r\n" + extra +
                  "\r\n" + body;
-    sendAll(client, res);
+    send_all(client, res);
 }
 
 // ---- static files: /static/<name>, loaded into memory once at startup (no disk reads) ----
@@ -351,7 +351,7 @@ static int serve_static(SOCKET client, const Request& req) {
 
 // Handles one client: read, route, close. Returns what was answered (for the worker's log and metrics).
 // Per-request console lines only print when VERBOSE_LOG = 1.
-RequestInfo handleClient(const ClientJob& job) {
+RequestInfo handle_client(const ClientJob& job) {
     SOCKET client = job.sock;
     RequestInfo info;
     Request req;
@@ -385,8 +385,8 @@ RequestInfo handleClient(const ClientJob& job) {
     return info;
 }
 
-bool startServer() {
-    SetConsoleCtrlHandler(onCtrlC, TRUE);
+bool start_server() {
+    SetConsoleCtrlHandler(on_ctrl_c, TRUE);
     load_static_files(STATIC_DIR);      // Loaded before the workers start, so the map is only read later (no mutex needed).
 
     // WSAStartup must run before any socket call (version 2.2).
@@ -416,7 +416,7 @@ bool startServer() {
     addr.sin_port = htons(PORT);
     if (bind(server, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
         log_msg("bind failed: " + to_string(WSAGetLastError()));
-        closeServerSocket();
+        close_server_socket();
         WSACleanup();
         return false;
     }
@@ -424,7 +424,7 @@ bool startServer() {
     // Start waiting for connections; the OS keeps the backlog.
     if (listen(server, SOMAXCONN) == SOCKET_ERROR) {
         log_msg("listen failed: " + to_string(WSAGetLastError()));
-        closeServerSocket();
+        close_server_socket();
         WSACleanup();
         return false;
     }
@@ -448,7 +448,7 @@ static void reject_client(SOCKET client) {
     closesocket(client);
 }
 
-void runServer() {
+void run_server() {
     while (true) {
         // accept() sleeps until a client connects and returns a new socket for it.
         sockaddr_in from = {};
@@ -479,8 +479,8 @@ void runServer() {
     }
 }
 
-void stopServer() {
-    closeServerSocket();
+void stop_server() {
+    close_server_socket();
     // Pairs with WSAStartup.
     WSACleanup();
 }
