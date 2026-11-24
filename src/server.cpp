@@ -1,5 +1,4 @@
-// server.cpp - Winsock sockets: accept loop, reading and parsing requests, sending replies, static files.
-// Owner: Aradhana
+
 #include <winsock2.h>   // Must come before windows.h.
 #include <windows.h>
 #include <filesystem>
