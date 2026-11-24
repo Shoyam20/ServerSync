@@ -1,5 +1,3 @@
-// cart.cpp - the shopping cart: show, add, update quantity, remove.
-// Owner: Ashutosh
 #include <winsock2.h>
 #include <windows.h>
 #include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
