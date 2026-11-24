@@ -345,7 +345,7 @@ static void worker_loop(int id) {
         if (job.sock == INVALID_SOCKET) break;    // INVALID_SOCKET is the "stop" signal.
         long long picked = now_us();              // queue_wait_ms ends here: accept to now.
         metric_busy(1);
-        RequestInfo info = handleClient(job);
+        RequestInfo info = handle_client(job);
         long long done = now_us();
         metric_busy(-1);
         if (info.status > 0) finish_request(info, job.accept_us, picked, done);
