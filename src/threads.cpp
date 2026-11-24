@@ -1,5 +1,4 @@
-// threads.cpp - client queue, worker, logger, cleanup and delivery threads, metrics, thread-safe logging.
-// Owner: Shoyam20
+
 #include <winsock2.h>
 #include <algorithm>
 #include <cmath>
