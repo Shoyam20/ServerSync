@@ -1,5 +1,3 @@
-// auth.cpp - password rules, signup, login, logout, change password, My Sessions.
-// Owner: Ashutosh
 #include <winsock2.h>
 #include <windows.h>
 #include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
