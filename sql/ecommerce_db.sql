@@ -7,7 +7,7 @@
 --   users, user_sessions, categories, products, cart, cart_items, orders, order_status_history, order_items,
 --   payments, request_logs, admin_actions, states, addresses, order_addresses
 -- Seed data: 15 categories, 52 products, 36 states / union territories. No users, no orders (signup creates users).
---
+
 -- Needs MySQL 8.0.16 or newer (CHECK constraints are ignored by older versions).
 
 SET NAMES utf8mb4;
