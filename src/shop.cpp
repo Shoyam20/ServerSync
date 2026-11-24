@@ -1,4 +1,3 @@
-
 #include <winsock2.h>
 #include <windows.h>
 #include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
@@ -152,4 +151,3 @@ int product_page(SOCKET client, const Request& req) {
                                         {"price", rupees_text(p[3])}, {"stock", stock_html(p[4])}, {"action", action}});
     return send_page(client, req, 200, p[1], content, "", cart_notice(req));
 }
-
