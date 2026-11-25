@@ -99,3 +99,20 @@ tests/            offline tests (throwaway MySQL, fake database) and tests again
 
 Most settings (worker count, queue size, DB pool size, session length, delivery delays) are constants at the top of
 `include/common.h`.
+
+## Tests
+
+Most tests need no server and never touch your real database: they start their own throwaway MySQL on port 3399
+(`tests/throwaway_mysql.py`), or compile the real `pages.cpp` with a fake database (`tests/pages_render_check.cpp`).
+
+```
+python tests\run_all.py                 all offline tests, with a pass / fail summary
+python tests\run_all.py password        only the files whose name contains "password"
+python tests\test_password_hash.py      one file
+```
+
+`run_all.py` skips the tests that need a running server (`test_auth`, `test_cart`, `test_checkout_http`,
+`test_live_flow`, `test_metrics_http`, `test_static_http`); start `server.exe` yourself and run those directly.
+
+GitHub Actions runs two workflows on every push: **linux build** (the Render Dockerfile) and **windows tests**
+(`build.bat` + `run_all.py` with MySQL 8.0 on a Windows runner).
