@@ -2,7 +2,7 @@
 # Never reads or writes db.conf and never connects to your real database.
 import os, shutil, subprocess, tempfile, time
 
-BASE = r"C:\Program Files\MySQL\MySQL Server 8.0"
+BASE = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # CI ya dusri jagah install ho to MYSQL_DIR set karo
 MYSQLD, MYSQL, MYSQLADMIN = (os.path.join(BASE, "bin", n) for n in ("mysqld.exe", "mysql.exe", "mysqladmin.exe"))
 PORT = "3399"
 CONN = ["--host=127.0.0.1", "--port=" + PORT, "--user=root"]

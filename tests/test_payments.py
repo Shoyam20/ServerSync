@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import throwaway_mysql as t
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MYSQL_DIR = r"C:\Program Files\MySQL\MySQL Server 8.0"
+MYSQL_DIR = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # CI ya dusri jagah install ho to MYSQL_DIR set karo
 exe = os.path.join(os.environ.get("TEMP", "."), "payments_check.exe")
 fails = 0
 

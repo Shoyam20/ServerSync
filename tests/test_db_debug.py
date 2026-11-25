@@ -4,7 +4,7 @@
 import os, re, shutil, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE = r"C:\Program Files\MySQL\MySQL Server 8.0"
+BASE = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # CI ya dusri jagah install ho to MYSQL_DIR set karo
 fails = 0
 
 def check(name, cond, extra=""):

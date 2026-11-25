@@ -58,7 +58,7 @@ cred_names = re.findall(r"^\| \d+ \| ([^|]+) \|", credits, re.M)
 check("the credits list the seed products in the same order as the SQL seed", [n.strip() for n in cred_names] == names[:52], (names[:3], cred_names[:3]))
 
 print("--- B. the static server")
-BASE = r"C:\Program Files\MySQL\MySQL Server 8.0"
+BASE = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # CI ya dusri jagah install ho to MYSQL_DIR set karo
 exe = os.path.join(work, "photos_check.exe")
 r = subprocess.run(["g++", "-std=c++20", "-o", exe, os.path.join(ROOT, "tests", "photos_check.cpp"), "-I" + os.path.join(ROOT, "include"), "-I" + os.path.join(BASE, "include"),
                     "-lws2_32", "-static-libgcc", "-static-libstdc++"], capture_output=True, text=True)

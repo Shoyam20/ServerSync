@@ -5,7 +5,7 @@ import json, os, subprocess, sys, tempfile
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")      # output contains the rupee sign
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE = r"C:\Program Files\MySQL\MySQL Server 8.0"
+BASE = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # CI ya dusri jagah install ho to MYSQL_DIR set karo
 tmp = tempfile.mkdtemp(prefix="serversync_helpers_")
 exe = os.path.join(tmp, "pages_helpers_check.exe")
 code = 1
