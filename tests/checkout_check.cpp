@@ -19,6 +19,16 @@ void log_verbose(const string& tag, const string& msg) { log_tag(tag, msg); }   
 static int commits = 0, rollbacks = 0;
 void metric_checkout(bool commit) { if (commit) commits++; else rollbacks++; }
 
+// do_checkout now needs a shipping address of that user. The python side gives every test user one address;
+// 0 (no address) makes do_checkout refuse, which is what a user without an address would get.
+static int address_for(int uid) {
+    vector<vector<string>> rows;
+    if (!db_select("SELECT address_id FROM addresses WHERE user_id = ? AND is_active = TRUE ORDER BY address_id LIMIT 1",
+                   {to_string(uid)}, rows) || rows.empty())
+        return 0;
+    return atoi(rows[0][0].c_str());
+}
+
 int main(int argc, char** argv) {
     mysql_library_init(0, nullptr, nullptr);
     for (int i = 0; i < DB_POOL; i++) {
@@ -39,7 +49,7 @@ int main(int argc, char** argv) {
         int uid = atoi(argv[i + 1]);
         threads.emplace_back([&res, i, uid] {
             mysql_thread_init();
-            res[i] = do_checkout(uid);
+            res[i] = do_checkout(uid, address_for(uid));     // default PaymentInfo = cash on delivery
             mysql_thread_end();
         });
     }

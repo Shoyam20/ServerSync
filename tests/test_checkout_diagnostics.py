@@ -40,7 +40,10 @@ try:
 
     schema = open(os.path.join(ROOT, "sql", "ecommerce_db.sql"), encoding="utf-8").read()
     prep = ("INSERT INTO users (name,email,password) VALUES ('a','a@x.com','secret1'); INSERT INTO cart (user_id) VALUES (1);"
-            "INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (1, 1, 2)")
+            "INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (1, 1, 2);"
+            # checkout needs a shipping address now
+            "INSERT INTO addresses(user_id,first_name,last_name,phone,line1,city,state_id,pincode,address_type,is_default) "
+            "VALUES(1,'Test','User','9876543210','12 MG Road','Dehradun',27,'248001','HOME',1)")
 
     db.start()
 

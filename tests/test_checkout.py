@@ -55,6 +55,10 @@ def fresh():
     db.run(read(r"sql\ecommerce_db.sql"))
     sql("INSERT INTO users (name,email,password) VALUES ('a','a@x.com','secret1'),('b','b@x.com','secret1'),"
         "('c','c@x.com','secret1')")
+    # checkout needs a shipping address now (checkout_check.cpp picks the user's first one)
+    for uid in (1, 2, 3):
+        sql("INSERT INTO addresses(user_id,first_name,last_name,phone,line1,city,state_id,pincode,address_type,is_default) "
+            "VALUES(%d,'Test','User','9876543210','12 MG Road','Dehradun',27,'248001','HOME',1)" % uid)
 
 def cart(user, items):
     """ACTIVE cart for `user` with items [(product_id, qty)]"""
