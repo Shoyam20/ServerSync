@@ -76,3 +76,26 @@ docker run -p 8080:8080 -e DB_HOST=... -e DB_PORT=... -e DB_USER=... -e DB_PASSW
 
 The Docker image turns the debug routes (`/test`, `/slow`, `/dbtest`, `/dbslow`) off with `DISABLE_TEST_ROUTES=1`.
 Deploying to Render + Aiven step by step is in [DEPLOY.md](DEPLOY.md).
+
+## Project structure
+
+```
+src/
+  main.cpp        start-up and shut-down order (templates -> DB pool -> socket -> threads)
+  server.cpp      sockets: accept loop, reading requests, sending responses, static files under /static/
+  threads.cpp     client queue, worker threads, request logger, session cleanup, delivery thread, metrics
+  pages.cpp       routing, sessions, signup / login, every page, template rendering
+  db.cpp          MySQL connection pool, query helpers, checkout / order / password transactions
+include/
+  common.h        settings (ports, pool sizes, limits) and shared structs / declarations
+  platform.h      everything that differs between Windows and Linux
+  password_hash.h PBKDF2 password hashing
+templates/        HTML templates (loaded into memory at start-up)
+public/           CSS, JavaScript, favicon and product photos
+sql/              ecommerce_db.sql (full schema + seed data) and the old migrations
+tests/            offline tests (throwaway MySQL, fake database) and tests against a running server
+.github/workflows CI: Linux Docker build and Windows build + tests
+```
+
+Most settings (worker count, queue size, DB pool size, session length, delivery delays) are constants at the top of
+`include/common.h`.
