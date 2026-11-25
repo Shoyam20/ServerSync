@@ -267,6 +267,16 @@ static string reason(int status) {
     return "Unknown";
 }
 
+// Status line + headers + the blank line that ends them, without the body.
+// Content-Length must equal the body size in bytes (also for HEAD, where the body itself is not sent).
+static string response_head(int status, const string& type, size_t length, const string& extra) {
+    return "HTTP/1.1 " + to_string(status) + " " + reason(status) + "\r\n"
+           "Content-Type: " + type + "\r\n"
+           "Content-Length: " + to_string(length) + "\r\n"
+           "Connection: close\r\n" + extra +
+           "\r\n";
+}
+
 static void send_all(SOCKET client, const string& res) {
     // send() may send fewer bytes than asked, so loop.
     size_t sent = 0;
@@ -284,13 +294,7 @@ static void send_all(SOCKET client, const string& res) {
 // extra = more header lines, each ending in \r\n (e.g. "Retry-After: 2\r\n").
 void send_response(SOCKET client, int status, const string& type, const string& body,
                    const string& extra) {
-    // Content-Length must equal the body size in bytes.
-    string res = "HTTP/1.1 " + to_string(status) + " " + reason(status) + "\r\n"
-                 "Content-Type: " + type + "\r\n"
-                 "Content-Length: " + to_string(body.size()) + "\r\n"
-                 "Connection: close\r\n" + extra +
-                 "\r\n" + body;
-    send_all(client, res);
+    send_all(client, response_head(status, type, body.size(), extra) + body);
 }
 
 // ---- static files: /static/<name>, loaded into memory once at startup (no disk reads) ----
