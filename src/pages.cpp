@@ -743,16 +743,36 @@ static int login_page(SOCKET client, const Request& req) {
     string pass = field(req, "password");
     const string bad = "Invalid email or password.";   // email galat ho ya password, message ek hi
 
-    // BINARY: password ka match capital/small letters ke hisaab se (normal compare case-insensitive hota hai)
+    // Pehle email se user aur uska saved password (hash) lao, phir C++ me verify_password se milao. Pehle yeh kaam SQL me
+    // "AND BINARY password = ?" se hota tha, par hash ke saath DB khud compare nahi kar sakta (har hash ka salt alag hai)
     vector<vector<string>> rows;
-    if (!db_select("SELECT user_id FROM users WHERE email = ? AND BINARY password = ?", {email, pass}, rows))
+    if (!db_select("SELECT user_id, password FROM users WHERE email = ?", {email}, rows) || !cols_ok(rows, 2))
         return error_page(client, req, 500, "Database error");
+    bool ok = false;
     if (rows.empty()) {
+        // email hai hi nahi: phir bhi ek hash ka kaam karo, taaki "galat email" jaldi aur "galat password" der se
+        // jawab na de (warna time naap kar pata chal jaata ki kaunse emails registered hain)
+        static const string dummy = hash_password("not-a-real-password");
+        verify_password(pass, dummy);
+    } else {
+        ok = verify_password(pass, rows[0][1]);
+    }
+    if (!ok) {
         log_tag("PAGE", "login failed");
         return send_page(client, req, 401, "Login", login_form(email), "", flash_text("err", bad));
     }
-    if (!cols_ok(rows, 1)) return error_page(client, req, 500, "Database error");
     string uid = rows[0][0];             // login par password ke niyam kabhi nahi dekhte: purane passwords chalte rehte hain
+    const string stored = rows[0][1];
+
+    // purana user (plain text password) ya kam iterations wala hash: abhi typed password hamare paas hai, to naya hash save kar do.
+    // "AND BINARY password = <jo abhi padha>": beech me kisi ne password badal diya ho to uska naya password nahi kuchlte.
+    // Fail ho jaaye to bhi login chalta hai (agli baar phir koshish hogi)
+    if (password_needs_rehash(stored)) {
+        const string fresh = hash_password(pass);
+        if (!fresh.empty() &&
+            db_exec("UPDATE users SET password = ? WHERE user_id = ? AND BINARY password = ?", {fresh, uid, stored}) == 1)
+            log_tag("PAGE", "user " + uid + ": password upgraded to " + (is_password_hash(stored) ? "more iterations" : "a hash"));
+    }
 
     string sid;
     if (!new_session_id(sid)) return error_page(client, req, 500, "Could not create session");
