@@ -1072,8 +1072,9 @@ AddressResult address_delete(int user_id, int address_id) {
 }
 
 // ---- password badalna: ek DB transaction ----
-// Password abhi plain text me hi store hota hai (hash baad me). Niyam (8-64 characters, upper/lower/digit/special ...) pages.cpp ka
-// check_password dekhta hai, DB ke CHECK me nahi: wo sirf typed password par lagte hain, hash hone par DB me wo shakal rahegi hi nahi.
+// DB me password ka hash rehta hai (password_hash.h). Hash banana aur typed password verify karna pages.cpp karta hai (CPU ka kaam,
+// DB connection pakde bina); yahan sirf saved value badalti hai. Niyam (8-64 characters, upper/lower/digit/special ...) pages.cpp ka
+// check_password dekhta hai, DB ke CHECK me nahi: wo sirf typed password par lagte hain, hash me wo shakal rehti hi nahi.
 static int pw_fail(int err, PasswordResult& r) {
     r.status = (err == 1213 || err == 1205) ? 503 : 500;
     r.message = r.status == 503 ? "The shop is busy right now. Please try again in a moment." : "Database error";
@@ -1081,8 +1082,9 @@ static int pw_fail(int err, PasswordResult& r) {
 }
 
 // Transaction ke andar:
-//  1) UPDATE ... WHERE user_id = ? AND BINARY password = <purana>: "purana sahi hai" ki jaanch aur badlav ek hi statement me, to beech me
-//     kisi aur ke badalne ka gap nahi. 0 rows = purana password galat. (BINARY: capital/small ka farq, login jaisa)
+//  1) UPDATE ... WHERE user_id = ? AND BINARY password = <current_stored>: "value abhi bhi wahi hai jo pages.cpp ne verify ki" ki
+//     jaanch aur badlav ek hi statement me, to beech me kisi aur ke badalne ka gap nahi. 0 rows = value badal chuki / user nahi -> 403.
+//     (BINARY: byte-by-byte compare, capital/small ka farq bhi)
 //  2) is user ke baaki sab active sessions band (end_reason 'LOGOUT'), sirf abhi wala session (keep_session) chalta rehta hai.
 //  Dono saath hi pakke hote hain ya saath hi nahi: password badle aur purane session zinda rahein, aisa kabhi nahi
 static int pw_steps(MYSQL* m, int user_id, const string& current, const string& new_pw, const string& keep_session, PasswordResult& r, int& err) {

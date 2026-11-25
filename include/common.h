@@ -190,7 +190,7 @@ void send_response(SOCKET client, int status, const string& type, const string& 
 
 // ---- pages.cpp ----
 // password ke niyam: fail hue niyamon ke messages (khali = theek). name / email / old_pw se: password me naam ya email ka hissa
-// nahi, aur badalte waqt purane jaisa nahi (old_pw "" = signup / login: yeh niyam nahi lagta). Password abhi plain text hi hai (hash nahi)
+// nahi, aur badalte waqt purane jaisa nahi (old_pw "" = signup / login: yeh niyam nahi lagta). Yeh typed password par chalta hai; DB me sirf hash jaata hai (password_hash.h)
 vector<string> check_password(const string& pw, const string& name, const string& email, const string& old_pw);
 bool load_templates(const string& dir);                   // dir ki saari .html templates memory me (startup par); sab zaroori mili?
 // template ka naam + values: {{key}} -> HTML-escaped value, {{{key}}} -> jaisa hai waisa (sirf hamare banaye HTML ke liye)
@@ -286,9 +286,10 @@ struct RoleResult {
     string from;                    // purana role (log ke liye)
 };
 RoleResult role_change(int admin_id, int user_id, const string& new_role);
-// password badlo: purana sahi ho tabhi, naya password + keep_session ke siva is user ke baaki sab
-// sessions band (end_reason 'LOGOUT'): sab ek transaction me
-PasswordResult password_change(int user_id, const string& current, const string& new_pw, const string& keep_session);
+// password badlo: current_stored = DB me abhi jo value hai (pages.cpp ne padh kar verify ki), new_hash = naya hash.
+// DB me value tab tak wahi ho tabhi badlegi; saath me keep_session ke siva is user ke baaki sab sessions band
+// (end_reason 'LOGOUT'): sab ek transaction me
+PasswordResult password_change(int user_id, const string& current_stored, const string& new_hash, const string& keep_session);
 // admin ke har badlav ki ek row admin_actions me (transaction ke bahar wale badlavon ke liye)
 void admin_audit(int admin_id, const string& action, const string& details);
 // request_logs me ek saath kai rows (ek multi-row INSERT). Kitni judi wo return, error par -1
