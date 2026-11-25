@@ -82,7 +82,7 @@ try:
         "('active1',1,NOW()+INTERVAL 1 HOUR,1)", "ecommerce_db")
     run("INSERT INTO user_sessions (session_id,user_id,expires_at,is_active,logout_time) VALUES "
         "('loggedout1',1,NOW()+INTERVAL 1 HOUR,0,NOW())", "ecommerce_db")
-    run(read(r"sql\alter_001_session_end_reason.sql"))
+    run(read(r"sql\migrations\alter_001_session_end_reason.sql"))
     rows = run("SELECT session_id, is_active, IFNULL(end_reason,'NULL') FROM user_sessions ORDER BY session_id",
                "ecommerce_db").split("\n")
     check("ALTER keeps data, backfills LOGOUT only on ended sessions",

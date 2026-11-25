@@ -66,12 +66,12 @@ try:
     db.run("ALTER TABLE users DROP CHECK chk_users_role", "ecommerce_db")
     db.run("ALTER TABLE users DROP COLUMN role", "ecommerce_db")
     before = rows("SELECT user_id, email, name, password, created_at FROM users ORDER BY user_id")
-    db.run(read(r"sql\alter_004_users_role.sql"))
+    db.run(read(r"sql\migrations\alter_004_users_role.sql"))
     after = rows("SELECT user_id, email, name, password, created_at FROM users ORDER BY user_id")
     check("ALTER keeps every existing row and value", before == after and len(after) == 2)
     check("ALTER: every existing user is a CUSTOMER", [r[0] for r in rows("SELECT role FROM users")] == ["CUSTOMER", "CUSTOMER"])
     check("ALTER: the CHECK works too", fails_with("UPDATE users SET role = 'ROOT'", "chk_users_role"))
-    check("ALTER: a second run is refused (Duplicate ... error), nothing breaks", fails_with(read(r"sql\alter_004_users_role.sql"), "duplicate"))
+    check("ALTER: a second run is refused (Duplicate ... error), nothing breaks", fails_with(read(r"sql\migrations\alter_004_users_role.sql"), "duplicate"))
     cols = [r[0] for r in rows("SHOW COLUMNS FROM users")]
     check("columns: user_id, email, name, password, created_at, role", cols == ["user_id", "email", "name", "password", "created_at", "role"], str(cols))
 
@@ -137,11 +137,11 @@ try:
     # --- alter_005 on an old products table ---
     db.run("ALTER TABLE products DROP COLUMN is_active", "ecommerce_db")
     before = rows("SELECT product_id, name, description, price, stock, category_id FROM products ORDER BY product_id")
-    db.run(read(r"sql\alter_005_products_is_active.sql"))
+    db.run(read(r"sql\migrations\alter_005_products_is_active.sql"))
     after = rows("SELECT product_id, name, description, price, stock, category_id FROM products ORDER BY product_id")
     check("alter_005: every product row and value is kept (%d products)" % len(after), before == after and len(after) > 40)
     check("alter_005: every existing product is active (visible in the store)", rows("SELECT COUNT(*) FROM products WHERE is_active = TRUE")[0][0] == str(len(after)))
-    check("alter_005: a second run is refused (Duplicate column), nothing breaks", fails_with(read(r"sql\alter_005_products_is_active.sql"), "duplicate"))
+    check("alter_005: a second run is refused (Duplicate column), nothing breaks", fails_with(read(r"sql\migrations\alter_005_products_is_active.sql"), "duplicate"))
     check("fresh schema has the same column", "is_active    BOOLEAN        NOT NULL DEFAULT TRUE" in schema)
     default_row = rows("SELECT COLUMN_DEFAULT, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='ecommerce_db' AND TABLE_NAME='products' AND COLUMN_NAME='is_active'")[0]
     check("column default is 1 (TRUE) and NOT NULL", default_row == ["1", "NO"], str(default_row))
@@ -256,13 +256,13 @@ try:
     db.run("INSERT INTO user_sessions (session_id, user_id, expires_at, is_active, end_reason) VALUES (REPEAT('1',64), 2, NOW() + INTERVAL 1 HOUR, 1, NULL), (REPEAT('2',64), 3, NOW() - INTERVAL 1 HOUR, 0, 'LOGOUT')", "ecommerce_db")
     check("old database: end_reason 'FORCED' is refused before the ALTER", fails_with("UPDATE user_sessions SET end_reason = 'FORCED' WHERE session_id = REPEAT('2',64)", "chk_sessions_end_reason"))
     before = rows("SELECT session_id, user_id, end_reason FROM user_sessions ORDER BY session_id")
-    db.run(read(r"sql\alter_007_admin_audit_and_forced.sql"))
+    db.run(read(r"sql\migrations\alter_007_admin_audit_and_forced.sql"))
     check("alter_007: existing sessions keep all their data", rows("SELECT session_id, user_id, end_reason FROM user_sessions ORDER BY session_id") == before)
     check("alter_007: 'FORCED' is accepted, 'HACKED' is still refused",
           db.run("UPDATE user_sessions SET end_reason = 'FORCED' WHERE session_id = REPEAT('2',64)", "ecommerce_db") is not None and
           fails_with("UPDATE user_sessions SET end_reason = 'HACKED' WHERE session_id = REPEAT('2',64)", "chk_sessions_end_reason"))
     check("alter_007: admin_actions exists with the 5 columns", [r[0] for r in rows("SHOW COLUMNS FROM admin_actions")] == ["action_id", "admin_id", "action", "details", "created_at"])
-    check("alter_007: safe to run a second time (same result)", db.run(read(r"sql\alter_007_admin_audit_and_forced.sql")) is not None and rows("SELECT COUNT(*) FROM admin_actions")[0][0] == "0")
+    check("alter_007: safe to run a second time (same result)", db.run(read(r"sql\migrations\alter_007_admin_audit_and_forced.sql")) is not None and rows("SELECT COUNT(*) FROM admin_actions")[0][0] == "0")
     fresh_cols = [r[0] for r in rows("SHOW COLUMNS FROM admin_actions")]
     check("a fresh schema has the same table and the same CHECK list", "'FORCED'" in schema and "CREATE TABLE admin_actions" in schema and fresh_cols == ["action_id", "admin_id", "action", "details", "created_at"])
     check("audit table: admin_id must be a real user (FK)", fails_with("INSERT INTO admin_actions (admin_id, action) VALUES (999, 'X')", "foreign key"))
