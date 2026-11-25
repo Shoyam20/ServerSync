@@ -30,7 +30,19 @@ bool db_select_on(MYSQL*, const string&, const vector<string>&, vector<vector<st
     rows = fake_rows;
     return true;
 }
-CheckoutResult do_checkout(int) { return CheckoutResult(); }
+CheckoutResult do_checkout(int, int, const PaymentInfo&) { return CheckoutResult(); }   // signature gained address + payment
+// functions added to pages.cpp after this test was written; none of the checks here reach them, they only have to link
+PasswordResult password_change(int, const string&, const string&, const string&) { return PasswordResult(); }
+const StaticFile* find_static(const string&) { return nullptr; }
+string address_check(Address&) { return ""; }
+AddressResult address_save(int, const Address&, bool) { return AddressResult(); }
+AddressResult address_delete(int, int) { return AddressResult(); }
+AddressResult address_set_default(int, int) { return AddressResult(); }
+string order_next_status(const string& status) {           // same steps as FLOW in db.cpp
+    static const char* FLOW[] = {"PLACED", "PACKED", "SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED"};
+    for (int i = 0; i < 4; i++) if (status == FLOW[i]) return FLOW[i + 1];
+    return "";
+}
 int db_exec_on(MYSQL*, const string&, const vector<string>&, int*) { return -1; }
 int find_active_cart(MYSQL*, int) { return 0; }
 int get_active_cart(MYSQL*, int) { return 1; }
