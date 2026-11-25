@@ -6,7 +6,7 @@
 #include <fstream>
 #include <mutex>
 #include "common.h"
-#include "password_hash.h"   // hash_password / verify_password (PBKDF2): passwords ab plain text me save nahi hote
+#include "password_hash.h"   // hash_password / verify_password (PBKDF2): passwords are never stored as plain text
 using namespace std;
 
 const string HTML = "text/html; charset=utf-8";
@@ -712,8 +712,8 @@ static int signup_page(SOCKET client, const Request& req) {
     if (!errs.empty())
         return send_page(client, req, 400, "Sign up", signup_form(name, email, pw_problem ? &failed : nullptr), "", errors_flash(errs, pw_problem));
 
-    // DB me sirf hash jaata hai (password_hash.h), typed password kabhi nahi. Hash na ban paaye to account hi nahi banate:
-    // plain text save karna "fallback" nahi ho sakta
+    // Only the hash goes into the database (password_hash.h), never the typed password. If hashing fails we do not create
+    // the account: saving plain text is never a fallback.
     const string hashed = hash_password(pass);
     if (hashed.empty()) {
         log_tag("PAGE", "signup: password hashing failed");
@@ -743,15 +743,15 @@ static int login_page(SOCKET client, const Request& req) {
     string pass = field(req, "password");
     const string bad = "Invalid email or password.";   // email galat ho ya password, message ek hi
 
-    // Pehle email se user aur uska saved password (hash) lao, phir C++ me verify_password se milao. Pehle yeh kaam SQL me
-    // "AND BINARY password = ?" se hota tha, par hash ke saath DB khud compare nahi kar sakta (har hash ka salt alag hai)
+    // Load the user and the saved password (hash) by email, then compare in C++ with verify_password. This used to be done in
+    // SQL with "AND BINARY password = ?", but the database cannot compare against a salted hash (every hash has its own salt).
     vector<vector<string>> rows;
     if (!db_select("SELECT user_id, password FROM users WHERE email = ?", {email}, rows) || !cols_ok(rows, 2))
         return error_page(client, req, 500, "Database error");
     bool ok = false;
     if (rows.empty()) {
-        // email hai hi nahi: phir bhi ek hash ka kaam karo, taaki "galat email" jaldi aur "galat password" der se
-        // jawab na de (warna time naap kar pata chal jaata ki kaunse emails registered hain)
+        // Unknown email: still do one hash, so "wrong email" is not answered faster than "wrong password"
+        // (otherwise timing the response would reveal which emails are registered).
         static const string dummy = hash_password("not-a-real-password");
         verify_password(pass, dummy);
     } else {
@@ -764,9 +764,9 @@ static int login_page(SOCKET client, const Request& req) {
     string uid = rows[0][0];             // login par password ke niyam kabhi nahi dekhte: purane passwords chalte rehte hain
     const string stored = rows[0][1];
 
-    // purana user (plain text password) ya kam iterations wala hash: abhi typed password hamare paas hai, to naya hash save kar do.
-    // "AND BINARY password = <jo abhi padha>": beech me kisi ne password badal diya ho to uska naya password nahi kuchlte.
-    // Fail ho jaaye to bhi login chalta hai (agli baar phir koshish hogi)
+    // Old account (plain text password) or a hash with fewer iterations: we have the typed password right now, so save a
+    // fresh hash. "AND BINARY password = <the value just read>" means a password changed in between is not overwritten.
+    // If this fails the login still goes ahead (it is tried again at the next login).
     if (password_needs_rehash(stored)) {
         const string fresh = hash_password(pass);
         if (!fresh.empty() &&
@@ -801,8 +801,8 @@ static string change_pw_form(const Request& req, const string& email, const vect
     return render("change_password", v);
 }
 
-// GET /account/password = form, POST = badlo. Login zaroori. Purana password yahin verify hota hai, naya hash ban kar db.cpp ke
-// password_change ko jaata hai (wahi transaction me save + baaki sessions band)
+// GET /account/password = form, POST = change. Login required. The current password is verified here; the new one is hashed
+// and handed to password_change in db.cpp (which saves it and ends the other sessions in one transaction).
 static int account_password_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "GET" && req.method != "POST") return method_not_allowed(client, req, "GET, POST");
@@ -832,7 +832,7 @@ static int account_password_page(SOCKET client, const Request& req) {
     if (!errs.empty())
         return send_page(client, req, 400, "Change password", change_pw_form(req, email, failed.empty() ? nullptr : &failed), "", errors_flash(errs, true));
 
-    // purana password sahi hai? saved hash se milao (purane plain text users bhi chalte hain, verify_password dekho)
+    // Is the current password right? Compare with the saved hash (old plain text accounts work too, see verify_password).
     const string wrong_cur = "Current password is incorrect.";
     rows.clear();
     if (!db_select("SELECT password FROM users WHERE user_id = ?", {to_string(req.user_id)}, rows) || !cols_ok(rows, 1))
@@ -845,8 +845,8 @@ static int account_password_page(SOCKET client, const Request& req) {
         return error_page(client, req, 500, "Could not change password");
     }
 
-    // password_change ko wahi saved value dete hain jo abhi padhi: wo "UPDATE ... WHERE BINARY password = <saved>" karta hai, to
-    // agar beech me kisi aur ne password badal diya to 0 rows -> 403, kuch nahi badalta (pehle jaisa hi atomic check)
+    // Pass password_change the saved value we just read: it runs "UPDATE ... WHERE BINARY password = <saved>", so if someone
+    // changed the password in between, 0 rows match -> 403 and nothing changes (the same atomic check as before).
     PasswordResult r = password_change(req.user_id, rows[0][0], hashed, req.session_id);
     if (r.status == 200) {
         log_tag("PAGE", "user " + to_string(req.user_id) + " changed the password, " + to_string(r.ended) + " other sessions ended");
@@ -2916,8 +2916,8 @@ int route(SOCKET client, Request& req) {
     if (req.path == "/metrics") return metrics_page(client, req, false);
     if (req.path == "/metrics.json") return metrics_page(client, req, true);
 
-    // /healthz: Render (ya koi bhi uptime monitor) puchta hai "server zinda hai?". Sirf itna ki worker thread jawab de raha hai:
-    // DB, session, template kuch nahi chhoota, isliye load_user se pehle. Koi andar ka number bhi nahi bataata (metrics jaisa nahi)
+    // /healthz: Render (or any uptime monitor) asks "is the server alive?". It only shows that a worker thread answers:
+    // no database, session or template is touched, so it comes before load_user. It reveals no internal numbers (unlike /metrics).
     if (req.path == "/healthz") {
         if (req.method != "GET" && req.method != "HEAD") return method_not_allowed(client, req, "GET, HEAD");
         send_response(client, 200, "text/plain; charset=utf-8", "ok\n", "Cache-Control: no-store\r\n");
