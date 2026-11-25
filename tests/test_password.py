@@ -1,8 +1,8 @@
 # test_password.py - the password policy, in three parts:
 #   A. the real pages (tests/pages_render_check.cpp: real templates, real route(), fake DB answers): rules, signup, login, /account/password,
 #      the rules list (hidden until needed), and that the removed "forced change" feature is really gone
-#   B. the real password_change() (src/db.cpp) on a throwaway MySQL (see throwaway_mysql.py): wrong current password changes nothing,
-#      the right one updates the password (still plain text), and ends ALL OTHER sessions in one transaction
+#   B. the real password_change() (src/db.cpp) on a throwaway MySQL (see throwaway_mysql.py): a stale / wrong saved value changes nothing,
+#      the right one stores the new value it is given (pages.cpp hands it a hash), and ends ALL OTHER sessions in one transaction
 #   C. the live checklist and the eye button (public/app.js) in a real browser (headless Edge / Chrome), cross-checked against the server rules
 # No server, no db.conf, never your real database.     python tests\test_password.py
 import json, os, re, subprocess, sys, tempfile
@@ -88,6 +88,18 @@ check("login with a strong password -> /products", "Location: /products" in pg("
 check("wrong password -> the same old message, status 401, policy never mentioned",
       pg("pw_login_wrong")["status"] == 401 and flash("pw_login_wrong") == "Invalid email or password.")
 
+HASH_RE = r"pbkdf2_sha256\$\d+\$[0-9a-f]{32}\$[0-9a-f]{64}"
+def line_of(key):
+    return next((l[len(key) + 1:] for l in out.splitlines() if l.startswith(key + " ")), "")
+check("signup saves a PBKDF2 hash, never the typed password", re.fullmatch(r"Bob\|bob@x\.com\|" + HASH_RE, line_of("SIGNUP_ARGS")) is not None,
+      line_of("SIGNUP_ARGS"))
+check("old plain text account: login re-saves the password as a hash, only if it is still the old value",
+      line_of("REHASH_SQL") == "UPDATE users SET password = ? WHERE user_id = ? AND BINARY password = ?"
+      and re.fullmatch(HASH_RE + r"\|5\|Pass@1234", line_of("REHASH_ARGS")) is not None, line_of("REHASH_ARGS"))
+check("hashed account: login works and nothing is re-saved", line_of("HASHED_LOGIN_EXEC") == "none")
+check("hashed account, wrong password -> 401 same message", pg("pw_login_hashed_wrong")["status"] == 401
+      and flash("pw_login_hashed_wrong") == "Invalid email or password.")
+
 check("change page: three fields + checklist with the 'different from current' rule", all(x in pg("pw_change_get")["body"] for x in
       ('name="current_password"', 'name="new_password"', 'name="confirm_password"', 'data-rule="different"', 'data-name=', 'data-email="ann@x.com"')))
 check("change page: flash 'Password changed' after success", '<div class="flash ok">Password changed</div>' in pg("pw_change_get_ok")["body"])
@@ -97,11 +109,16 @@ check("weak / mismatch / same-as-old / no current -> 400 with the reasons, and n
       all(pg(n)["status"] == 400 for n in ("pw_change_weak", "pw_change_mismatch", "pw_change_same", "pw_change_no_current"))
       and "PW_BAD_CALLS 0" in out and "do not match" in flash("pw_change_mismatch") and "different from your current" in flash("pw_change_same")
       and "current password" in flash("pw_change_no_current"))
-check("wrong current password -> 403 'Current password is incorrect.'", pg("pw_change_wrong_current")["status"] == 403 and "Current password is incorrect." in flash("pw_change_wrong_current"))
+check("wrong current password -> 403 'Current password is incorrect.' from the page itself (password_change not called)",
+      pg("pw_change_wrong_current")["status"] == 403 and "Current password is incorrect." in flash("pw_change_wrong_current")
+      and "PW_WRONG_CURRENT_CALLS 0" in out)
+check("saved value changed in between (password_change says 403) -> 403 same message",
+      pg("pw_change_race")["status"] == 403 and "Current password is incorrect." in flash("pw_change_race"))
 check("busy -> 503, DB error -> 500", pg("pw_change_busy")["status"] == 503 and pg("pw_change_dberror")["status"] == 500)
-check("success -> 302 /account/password?ok=1 and password_change got (user 5, current, new, THIS session)",
+check("success -> 302 /account/password?ok=1 and password_change got (user 5, the SAVED value, a NEW HASH, THIS session)",
       pg("pw_change_ok")["status"] == 302 and "Location: /account/password?ok=1" in pg("pw_change_ok")["extra"]
-      and ("PASSWORD_CALL 5|Old@pass1|Zx9#kLm2Qw|" + "a" * 64) in out)
+      and re.search(r"^PASSWORD_CALL 5\|Old@pass1\|" + HASH_RE + r"\|" + "a" * 64 + "$", out, re.M) is not None
+      and "PASSWORD_CALL 5|Old@pass1|Zx9#kLm2Qw|" not in out)
 check("the password never appears in any page body", not any("Zx9#kLm2Qw" in p["body"] or "Old@pass1" in p["body"] for p in pages.values()))
 
 check("a normal logged-in user is not redirected anywhere", pg("pw_not_forced_products")["status"] == 200)
@@ -183,7 +200,7 @@ try:
 
     res = run_check("ok")
     check("right current password -> 200, two other sessions ended", res["OK"].startswith("200 ended=2"), res)
-    check("password stored exactly as typed (plain text, no hashing)", q("SELECT password FROM users WHERE user_id=1") == "New@pass9")
+    check("db layer stores exactly the new value it was given (pages.cpp passes a hash; this test passes a plain value)", q("SELECT password FROM users WHERE user_id=1") == "New@pass9")
     check("current session kept; the other sessions of that user ended with end_reason LOGOUT and a logout_time",
           q("SELECT is_active FROM user_sessions WHERE session_id='%s'" % sess("a")) == "1"
           and q("SELECT CONCAT(is_active, end_reason, (logout_time IS NOT NULL)) FROM user_sessions WHERE session_id IN ('%s','%s') ORDER BY session_id" % (sess("b"), sess("c"))) == "0LOGOUT1\n0LOGOUT1")

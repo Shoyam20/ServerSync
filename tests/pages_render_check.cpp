@@ -49,7 +49,14 @@ MYSQL* get_conn(int& id) { id = 2; return (MYSQL*)&dummy_conn; }
 void put_conn(int) {}
 bool db_select(const string& sql, const vector<string>&, vector<vector<string>>& rows, int*) { answer(sql, rows); return true; }
 bool db_select_on(MYSQL*, const string& sql, const vector<string>&, vector<vector<string>>& rows, int*) { answer(sql, rows); return true; }
-int db_exec(const string&, const vector<string>&, int* err) { if (err) *err = fake_exec_code; return fake_exec_result; }
+static string last_exec_sql, last_exec_args;     // what the last db_exec got (args joined with |), for the password checks
+int db_exec(const string& sql, const vector<string>& args, int* err) {
+    last_exec_sql = sql;
+    last_exec_args.clear();
+    for (size_t i = 0; i < args.size(); i++) last_exec_args += (i ? "|" : "") + args[i];
+    if (err) *err = fake_exec_code;
+    return fake_exec_result;
+}
 int db_exec_on(MYSQL*, const string&, const vector<string>&, int* err) { if (err) *err = fake_exec_code; return fake_exec_result; }
 bool db_scalar(const string&, string& out, int* conn) { out = fake_scalar; if (conn) *conn = 2; return true; }
 static int checkout_calls = 0;
@@ -740,15 +747,27 @@ int main() {
     run("pw_signup_contains_name", mk("POST", "/signup", false, {{"name", "Bobby"}, {"email", "b@x.com"}, {"password", "Bobby#2025"}, {"confirm_password", "Bobby#2025"}}));
     run("pw_signup_ok", mk("POST", "/signup", false, {{"name", "Bob"}, {"email", "bob@x.com"}, {"password", "Zx9#kLm2Qw"}, {"confirm_password", "Zx9#kLm2Qw"}}));
 
-    // login: the password rules are NOT checked at login (an old weak password still works); wrong password = the same old message
-    fake = {{"FROM users WHERE email", {{"5"}}}};
+    cout << "SIGNUP_ARGS " << last_exec_args << endl;      // what pw_signup_ok above handed to db_exec: name|email|<must be a hash>
+
+    // login: the password rules are NOT checked at login (an old weak password still works); wrong password = the same old message.
+    // The page reads (user_id, saved password) by email and checks it with verify_password.
+    // Old account with a plain text password: login works and the password is re-saved as a hash
+    fake = {{"FROM users WHERE email", {{"5", "Pass@1234"}}}};
+    last_exec_args = "";
     run("pw_login_weak", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "Pass@1234"}}));
+    cout << "REHASH_SQL " << last_exec_sql << endl;
+    cout << "REHASH_ARGS " << last_exec_args << endl;
+    // new account: the saved value is already a hash -> login works, nothing is re-saved
+    fake = {{"FROM users WHERE email", {{"5", hash_password("Zx9#kLm2Qw")}}}};
+    last_exec_sql = "";
     run("pw_login_strong", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "Zx9#kLm2Qw"}}));
+    cout << "HASHED_LOGIN_EXEC " << (last_exec_sql.find("UPDATE users SET password") == string::npos ? "none" : "rehash") << endl;
+    run("pw_login_hashed_wrong", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "Zx9#kLm2Qx"}}));
     fake = {{"FROM users WHERE email", {}}};
     run("pw_login_wrong", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "weak"}}));
 
-    // /account/password
-    fake = {{"SELECT email FROM users", {{"ann@x.com"}}}, {"FROM categories", cats}};
+    // /account/password (saved password of user 5 = old plain text "Old@pass1"; the page verifies it before password_change)
+    fake = {{"SELECT email FROM users", {{"ann@x.com"}}}, {"SELECT password FROM users", {{"Old@pass1"}}}, {"FROM categories", cats}};
     run("pw_change_get", mk("GET", "/account/password", true));
     run("pw_change_get_ok", mk("GET", "/account/password?ok=1", true));
         run("pw_change_guest", mk("GET", "/account/password", false));
@@ -760,8 +779,13 @@ int main() {
     run("pw_change_no_current", mk("POST", "/account/password", true, {{"new_password", "Zx9#kLm2Qw"}, {"confirm_password", "Zx9#kLm2Qw"}}));
     run("pw_change_guest_post", mk("POST", "/account/password", false, {{"current_password", "a"}, {"new_password", "b"}, {"confirm_password", "b"}}));
     cout << "PW_BAD_CALLS " << (password_calls - pw_calls_before) << endl;       // none of the above may reach password_change
-    fake_password.status = 403; fake_password.message = "Current password is incorrect.";
+    // wrong current password: the page itself says 403 (verify_password fails), password_change is never called
+    pw_calls_before = password_calls;
     run("pw_change_wrong_current", mk("POST", "/account/password", true, {{"current_password", "Nope@pass1"}, {"new_password", "Zx9#kLm2Qw"}, {"confirm_password", "Zx9#kLm2Qw"}}));
+    cout << "PW_WRONG_CURRENT_CALLS " << (password_calls - pw_calls_before) << endl;
+    // the saved value changed between the page's check and the UPDATE: password_change finds 0 rows -> 403
+    fake_password.status = 403; fake_password.message = "Current password is incorrect.";
+    run("pw_change_race", mk("POST", "/account/password", true, {{"current_password", "Old@pass1"}, {"new_password", "Zx9#kLm2Qw"}, {"confirm_password", "Zx9#kLm2Qw"}}));
     fake_password.status = 503; fake_password.message = "The shop is busy right now. Please try again in a moment.";
     run("pw_change_busy", mk("POST", "/account/password", true, {{"current_password", "Old@pass1"}, {"new_password", "Zx9#kLm2Qw"}, {"confirm_password", "Zx9#kLm2Qw"}}));
     fake_password.status = 500; fake_password.message = "Database error";
