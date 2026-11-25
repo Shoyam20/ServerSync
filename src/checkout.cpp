@@ -1,6 +1,4 @@
-#include <winsock2.h>
-#include <windows.h>
-#include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
+#include "platform.h"   // secure_random, sleep_ms, local_time (Windows / Linux)
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -251,7 +249,7 @@ static bool expiry_ok(const string& e) {
     if (mm < 1 || mm > 12) return false;
     time_t now = time(nullptr);
     tm t;
-    localtime_s(&t, &now);
+    local_time(&now, &t);   // localtime_s on Windows, localtime_r on Linux (platform.h)
     int cur = (t.tm_year + 1900) * 12 + t.tm_mon + 1;
     return yy * 12 + mm >= cur;
 }

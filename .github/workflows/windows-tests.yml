@@ -1,0 +1,59 @@
+# Builds server.exe with build.bat and runs the offline tests (tests/run_all.py) on a Windows machine,
+# the same way we run them on our own PCs. No database or secrets are needed.
+name: windows tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# a newer push to the same branch cancels the older run that is still going
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # the tests need mysqld.exe / mysql.exe and build.bat needs include\ + lib\ from MySQL 8.0.
+      # Use the one on the runner if it is there, else download the zip version (no installer needed).
+      - name: find or download mysql 8.0
+        shell: pwsh
+        run: |
+          $dir = "C:\Program Files\MySQL\MySQL Server 8.0"
+          if (-not (Test-Path "$dir\bin\mysqld.exe") -or -not (Test-Path "$dir\lib\libmysql.lib")) {
+            # downloads.mysql.com shows a "Technical Difficulties" page to bots, cdn.mysql.com gives the file directly
+            $v = "8.0.40"
+            Write-Host "downloading mysql $v"
+            curl.exe -fsSL -o "$env:RUNNER_TEMP\mysql.zip" "https://cdn.mysql.com/archives/mysql-8.0/mysql-$v-winx64.zip"
+            if ($LASTEXITCODE -ne 0) { throw "mysql download failed" }
+            Expand-Archive "$env:RUNNER_TEMP\mysql.zip" -DestinationPath "C:\mysql"
+            $dir = "C:\mysql\mysql-$v-winx64"
+          }
+          Get-ChildItem "$dir\lib" -Filter "libmysql*" | ForEach-Object { Write-Host $_.Name }
+          Write-Host "using mysql in $dir"
+          "MYSQL_DIR=$dir" >> $env:GITHUB_ENV
+          "MYSQL=$dir" >> $env:GITHUB_ENV
+
+      - name: compiler version
+        run: g++ --version
+
+      - name: build server.exe
+        shell: cmd
+        run: build.bat
+
+      # on our PCs libmysql.dll sits next to server.exe (it is git-ignored), and some tests copy it from there
+      - name: copy libmysql.dll into the project folder
+        shell: pwsh
+        run: Copy-Item "$env:MYSQL_DIR\lib\libmysql.dll" .
+
+      - name: offline tests
+        run: python tests/run_all.py

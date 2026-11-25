@@ -1,10 +1,11 @@
-#include <winsock2.h>   // Must come before windows.h.
-#include <windows.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
-#include "common.h"
+#include "common.h"   // includes platform.h: Winsock on Windows, POSIX sockets on Linux
+#ifndef _WIN32
+#include <csignal>
+#endif
 using namespace std;
 
 // Global so the Ctrl+C handler can close it.
@@ -15,15 +16,25 @@ static void close_server_socket() {
     if (server != INVALID_SOCKET) {
         SOCKET s = server;
         server = INVALID_SOCKET;
-        closesocket(s);   // Windows uses closesocket(), not close().
+#ifndef _WIN32
+        shutdown(s, SHUT_RDWR);   // Linux: close() alone does not wake an accept() blocked in another thread; shutdown() does.
+#endif
+        close_socket(s);          // closesocket() on Windows, close() on Linux (platform.h)
     }
 }
 
 // Ctrl+C closes the socket, so accept() fails and the loop ends.
+#ifdef _WIN32
 static BOOL WINAPI on_ctrl_c(DWORD) {
     close_server_socket();
     return TRUE;
 }
+#else
+// Linux: Ctrl+C sends SIGINT, and Render / Docker send SIGTERM when stopping. shutdown() and close() are safe in a handler.
+static void on_signal(int) {
+    close_server_socket();
+}
+#endif
 
 // Digits only, at most 9 (so it cannot overflow); false if invalid.
 static bool to_number(const string& s, size_t& num) {
@@ -176,8 +187,9 @@ static int recv_more(SOCKET client, string& data) {
     char buf[4096];
     int n = recv(client, buf, sizeof(buf), 0);   // The receive timeout (SO_RCVTIMEO) stops this waiting forever.
     if (n == SOCKET_ERROR) {
-        if (WSAGetLastError() == WSAETIMEDOUT) return 408;
-        log_msg("recv failed: " + to_string(WSAGetLastError()));
+        int err = sock_error();
+        if (sock_timed_out(err)) return 408;
+        log_msg("recv failed: " + to_string(err));
         return READ_GONE;
     }
     if (n == 0) return READ_GONE;                // recv returning 0 means the client closed the connection.
@@ -243,7 +255,7 @@ static void send_all(SOCKET client, const string& res) {
     while (sent < res.size()) {
         int n = send(client, res.c_str() + sent, (int)(res.size() - sent), 0);
         if (n == SOCKET_ERROR) {
-            log_msg("send failed: " + to_string(WSAGetLastError()));
+            log_msg("send failed: " + to_string(sock_error()));
             break;
         }
         sent += n;
@@ -382,55 +394,65 @@ RequestInfo handle_client(const ClientJob& job) {
     } else {
         log_msg_verbose("client left early");   // Client left: nothing to send (status 0 = not logged).
     }
-    closesocket(client);
+    close_socket(client);
     return info;
 }
 
 bool start_server() {
+#ifdef _WIN32
     SetConsoleCtrlHandler(on_ctrl_c, TRUE);
+#else
+    // SIGPIPE: on Linux, send() to a client that already left would kill the process. Ignore it; send() just returns an error.
+    signal(SIGPIPE, SIG_IGN);
+    // sa_flags = 0 (no SA_RESTART): a blocked accept() returns with EINTR when the signal arrives.
+    struct sigaction sa = {};
+    sa.sa_handler = on_signal;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+#endif
     load_static_files(STATIC_DIR);      // Loaded before the workers start, so the map is only read later (no mutex needed).
 
-    // WSAStartup must run before any socket call (version 2.2).
-    WSADATA wsa;
-    int r = WSAStartup(MAKEWORD(2, 2), &wsa);
-    if (r != 0) {
-        log_msg("WSAStartup failed: " + to_string(r));
+    // Windows: WSAStartup must run before any socket call. Linux: nothing to do.
+    if (!net_init()) {
+        log_msg("network init (WSAStartup) failed");
         return false;
     }
 
     // socket(): IPv4 (AF_INET), TCP (SOCK_STREAM).
     server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server == INVALID_SOCKET) {
-        log_msg("socket failed: " + to_string(WSAGetLastError()));
-        WSACleanup();
+        log_msg("socket failed: " + to_string(sock_error()));
+        net_cleanup();
         return false;
     }
 
     // Lets the port be reused right after a restart.
-    BOOL yes = TRUE;
+    int yes = 1;
     setsockopt(server, SOL_SOCKET, SO_REUSEADDR, (const char*)&yes, sizeof(yes));
 
     // INADDR_ANY = all network cards; htons = network byte order.
     sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(PORT);
-    if (bind(server, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        log_msg("bind failed: " + to_string(WSAGetLastError()));
+    int port = listen_port(PORT);       // PORT environment variable (Render sets it), else PORT from common.h
+    addr.sin_port = htons(port);
+    if (::bind(server, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        log_msg("bind failed on port " + to_string(port) + ": " + to_string(sock_error()));
         close_server_socket();
-        WSACleanup();
+        net_cleanup();
         return false;
     }
 
     // Start waiting for connections; the OS keeps the backlog.
     if (listen(server, SOMAXCONN) == SOCKET_ERROR) {
-        log_msg("listen failed: " + to_string(WSAGetLastError()));
+        log_msg("listen failed: " + to_string(sock_error()));
         close_server_socket();
-        WSACleanup();
+        net_cleanup();
         return false;
     }
 
-    log_msg("Listening on http://localhost:" + to_string(PORT));
+    log_msg("Listening on http://localhost:" + to_string(port));
     return true;
 }
 
@@ -439,31 +461,29 @@ static void reject_client(SOCKET client) {
     send_response(client, 503, "text/html; charset=utf-8", render_error_page("Server busy, try again"),
                   "Retry-After: 2\r\n");
 
-    // Closing with unread data makes Windows send RST, and the client may lose the 503.
+    // Closing with unread data makes the OS (Windows and Linux) send RST, and the client may lose the 503.
     // So send FIN first, read the request briefly (max 100 ms), then close.
-    shutdown(client, SD_SEND);
-    DWORD ms = 100;
-    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+    shutdown(client, SHUT_SEND);
+    set_recv_timeout(client, 100);
     char buf[4096];
     recv(client, buf, sizeof(buf), 0);
-    closesocket(client);
+    close_socket(client);
 }
 
 void run_server() {
     while (true) {
         // accept() sleeps until a client connects and returns a new socket for it.
         sockaddr_in from = {};
-        int from_len = sizeof(from);
+        sock_len_t from_len = sizeof(from);
         SOCKET client = accept(server, (sockaddr*)&from, &from_len);
         long long accepted = now_us();             // Note the time now: queue wait and latency are measured from here.
         if (client == INVALID_SOCKET) {
             if (server == INVALID_SOCKET) break;   // Ctrl+C closed the socket: stop.
-            log_msg("accept failed: " + to_string(WSAGetLastError()));
+            log_msg("accept failed: " + to_string(sock_error()));
             continue;
         }
-        // A slow client must not block a worker forever: receive timeout (ms).
-        DWORD ms = RECV_TIMEOUT_MS;
-        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms));
+        // A slow client must not block a worker forever: receive timeout (platform.h: DWORD ms on Windows, timeval on Linux).
+        set_recv_timeout(client, RECV_TIMEOUT_MS);
 
         // IPv4 as a.b.c.d; /metrics is only allowed from 127.0.0.1.
         const unsigned char* b = (const unsigned char*)&from.sin_addr;
@@ -482,6 +502,6 @@ void run_server() {
 
 void stop_server() {
     close_server_socket();
-    // Pairs with WSAStartup.
-    WSACleanup();
+    // Windows: WSACleanup, the pair of WSAStartup. Linux: nothing.
+    net_cleanup();
 }

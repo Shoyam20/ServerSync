@@ -1,6 +1,4 @@
-#include <winsock2.h>
-#include <windows.h>
-#include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
+#include "platform.h"   // secure_random, sleep_ms, local_time (Windows / Linux)
 #include <cstdio>
 #include <filesystem>
 #include <fstream>

@@ -1,4 +1,4 @@
-#include <winsock2.h>
+#include "platform.h"
 #include <mysql.h>
 #include <cstring>
 #include <chrono>
@@ -13,6 +13,8 @@ using namespace std;
 
 // ---- login details (read from db.conf, never written in the code) ----
 static string db_host, db_user, db_pass, db_name;
+static string db_ssl_ca;             // CA certificate file (e.g. Aiven's ca.pem). If set: SSL required + server certificate checked
+static bool db_ssl_required = false;  // no CA, but SSL still required (encrypted, certificate not checked)
 static unsigned int db_port = 3306;
 
 // ---- connection pool ----
@@ -30,13 +32,57 @@ static string who() {
     return thread_name();
 }
 
+static string env_or(const char* name, const string& fallback) {
+    const char* v = getenv(name);
+    return (v != nullptr && *v != '\0') ? string(v) : fallback;
+}
+
+// Config from environment variables (hosts like Render): if DB_HOST is set, db.conf is not read.
+// DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME; DB_CA_CERT = the whole CA certificate PEM text (optional).
+// It is a cloud database, so SSL is always required: VERIFY_CA when a CA is given, else REQUIRED (encrypted, no cert check).
+static bool load_env_conf() {
+    db_host = env_or("DB_HOST", "");
+    db_user = env_or("DB_USER", "");
+    db_pass = env_or("DB_PASSWORD", "");
+    db_name = env_or("DB_NAME", "ecommerce_db");
+    db_port = (unsigned int)atoi(env_or("DB_PORT", "3306").c_str());
+    db_ssl_required = true;
+
+    string pem = env_or("DB_CA_CERT", "");
+    if (!pem.empty()) {
+        // the MySQL library wants a file path, not the text: write the PEM to a file
+        const string ca_path = "db_ca_from_env.pem";
+        ofstream out(ca_path, ios::binary | ios::trunc);
+        out << pem;
+        if (pem.back() != '\n') out << '\n';
+        if (out) db_ssl_ca = ca_path;
+        else log_tag("DB", "cannot write " + ca_path + ": using SSL without certificate check");
+    }
+
+    if (db_user.empty() || db_pass.empty()) {
+        log_tag("DB", "DB_HOST is set, so DB_USER and DB_PASSWORD env vars are needed too.");
+        return false;
+    }
+    log_tag("DB", string("config: env vars (SSL ") + (db_ssl_ca.empty() ? "required, CA not checked)" : "with CA check)"));
+    return true;
+}
+
 // Reads db.conf: lines are key=value; a line starting with # is a comment.
+// Where: the DB_CONF environment variable if set, else ./db.conf, else /etc/secrets/db.conf (Render Secret Files).
 static bool load_conf() {
-    ifstream f("db.conf");
+    if (getenv("DB_HOST") != nullptr) return load_env_conf();
+    const char* env_path = getenv("DB_CONF");
+    string path = (env_path != nullptr && *env_path != '\0') ? env_path : "db.conf";
+    ifstream f(path);
+    if (!f && env_path == nullptr) {
+        path = "/etc/secrets/db.conf";
+        f.open(path);
+    }
     if (!f) {
         log_tag("DB", "db.conf not found. Copy db.conf.example to db.conf and fill in your MySQL details.");
         return false;
     }
+    log_tag("DB", "config: " + path);
 
     string line;
     bool has_host = false, has_user = false, has_pass = false, has_name = false;
@@ -53,6 +99,7 @@ static bool load_conf() {
         else if (key == "password") { db_pass = val; has_pass = true; }
         else if (key == "database") { db_name = val; has_name = true; }
         else if (key == "port") db_port = (unsigned int)atoi(val.c_str());
+        else if (key == "ssl_ca") db_ssl_ca = val;
     }
 
     if (!has_host || !has_user || !has_pass || !has_name) {
@@ -75,6 +122,16 @@ static MYSQL* open_conn() {
     unsigned int timeout = 5;                            // Give up after 5 seconds if the server is down.
     mysql_options(m, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
     mysql_options(m, MYSQL_SET_CHARSET_NAME, "utf8mb4");
+    // Cloud MySQL (Aiven) needs SSL. With ssl_ca: VERIFY_CA, the connection is encrypted and the server certificate must be
+    // signed by that CA (otherwise someone in the middle could read the password). No ssl_ca: the old behaviour.
+    if (!db_ssl_ca.empty()) {
+        mysql_options(m, MYSQL_OPT_SSL_CA, db_ssl_ca.c_str());
+        unsigned int ssl_mode = SSL_MODE_VERIFY_CA;
+        mysql_options(m, MYSQL_OPT_SSL_MODE, &ssl_mode);
+    } else if (db_ssl_required) {
+        unsigned int ssl_mode = SSL_MODE_REQUIRED;
+        mysql_options(m, MYSQL_OPT_SSL_MODE, &ssl_mode);
+    }
 
     if (mysql_real_connect(m, db_host.c_str(), db_user.c_str(), db_pass.c_str(),
                            db_name.c_str(), db_port, nullptr, CLIENT_FOUND_ROWS) == nullptr) {
@@ -95,14 +152,39 @@ bool init_db() {
         return false;
     }
 
-    for (int i = 0; i < DB_POOL; i++) {
-        MYSQL* m = open_conn();
-        if (m == nullptr) {
-            close_db();
-            return false;
+    // A cloud DB (Aiven free plan) that is asleep or still starting makes the first connect fail. Instead of exiting at once,
+    // wait and try again a few times, a little longer each time (5 s, 10 s, 15 s ...). Close a half-built pool before retrying.
+    bool ready = false;
+    for (int attempt = 1; attempt <= DB_CONNECT_TRIES && !ready; attempt++) {
+        ready = true;
+        for (int i = 0; i < DB_POOL; i++) {
+            MYSQL* m = open_conn();
+            if (m == nullptr) {
+                ready = false;
+                break;
+            }
+            pool[i] = m;
+            free_ids[free_count++] = i + 1;
         }
-        pool[i] = m;
-        free_ids[free_count++] = i + 1;
+        if (ready) break;
+        for (int i = 0; i < DB_POOL; i++) {
+            if (pool[i] != nullptr) {
+                mysql_close(pool[i]);
+                pool[i] = nullptr;
+            }
+        }
+        free_count = 0;
+        if (attempt < DB_CONNECT_TRIES) {
+            int wait = DB_CONNECT_WAIT_SECONDS * attempt;
+            log_tag("DB", "connect attempt " + to_string(attempt) + " of " + to_string(DB_CONNECT_TRIES) + " failed, trying again in " +
+                          to_string(wait) + " s");
+            this_thread::sleep_for(chrono::seconds(wait));
+        }
+    }
+    if (!ready) {
+        log_tag("DB", "gave up after " + to_string(DB_CONNECT_TRIES) + " attempts");
+        mysql_library_end();
+        return false;
     }
 
     free_sem.release(DB_POOL);
@@ -978,14 +1060,17 @@ AddressResult address_delete(int user_id, int address_id) {
 }
 
 // ---- change password: one DB transaction ----
-// Passwords are plain text for now (hashing later). The rules live in check_password (pages.cpp), not in a DB CHECK: a hash would not look typed.
+// The database stores a password hash (password_hash.h). Hashing and verifying the typed password happen in auth.cpp
+// (CPU work, done without holding a DB connection); this code only replaces the stored value. The rules live in
+// check_password, not in a DB CHECK: they apply to the typed password, and a hash does not look like one.
 static int pw_fail(int err, PasswordResult& r) {
     r.status = (err == 1213 || err == 1205) ? 503 : 500;
     r.message = r.status == 503 ? "The shop is busy right now. Please try again in a moment." : "Database error";
     return (err == 1213 || err == 1205) ? CO_RETRY : CO_FAIL;
 }
 
-// 1) One UPDATE checks the old password (BINARY = case-sensitive) and changes it: no gap for someone else to change it in between.
+// 1) One UPDATE checks that the stored value is still the one auth.cpp verified (BINARY = byte-by-byte) and changes it:
+//    no gap for someone else to change it in between. 0 rows = it changed or the user is gone -> 403.
 // 2) End the user's other sessions (LOGOUT), keep the current one. Both steps commit together or not at all.
 static int pw_steps(MYSQL* m, int user_id, const string& current, const string& new_pw, const string& keep_session, PasswordResult& r, int& err) {
     err = 0;

@@ -1,5 +1,5 @@
 #pragma once
-#include <winsock2.h>   // Must come before windows.h; gives the SOCKET type.
+#include "platform.h"   // SOCKET type and the Windows / Linux differences (winsock2.h or POSIX sockets)
 #include <string>
 #include <map>
 #include <vector>
@@ -22,6 +22,8 @@ const int PW_MIN_LEN = 8;                 // Minimum password length (characters
 const int PW_MAX_LEN = 64;                // Maximum password length (characters).
 const int MAX_ADDRESSES = 10;            // Max active shipping addresses per user.
 const int CHECKOUT_RETRIES = 3;           // Tries for a transaction on deadlock (1213) or lock wait timeout (1205).
+const int DB_CONNECT_TRIES = 5;           // how many times to try connecting to MySQL at startup (a sleeping cloud DB needs time to wake up)
+const int DB_CONNECT_WAIT_SECONDS = 5;    // wait after the first failure; each later wait adds this much again (5, 10, 15, 20 s)
 
 // Auto shipment tracking: the delivery thread moves an order PLACED -> PACKED -> SHIPPED -> OUT_FOR_DELIVERY -> DELIVERED.
 const int AUTO_DELIVERY = 1;              // 1 = delivery thread on, 0 = off (only the admin changes the status).
@@ -174,9 +176,9 @@ struct PaymentInfo {
 };
 
 // ---- server.cpp ----
-bool start_server();                 // WSAStartup, socket, bind, listen.
+bool start_server();                 // network init (WSAStartup on Windows), socket, bind, listen.
 void run_server();                   // Accept loop: accepts clients and puts them in the queue.
-void stop_server();                  // Close the socket, WSACleanup.
+void stop_server();                  // Close the socket, network cleanup (WSACleanup on Windows).
 RequestInfo handle_client(const ClientJob& job);   // One client: read, parse, route, send, close. Returns what happened.
 string trim(const string& s);
 int load_static_files(const string& dir);                 // Loads every file of dir into memory (once at startup); returns how many.
@@ -187,6 +189,7 @@ void send_response(SOCKET client, int status, const string& type, const string& 
 
 // ---- pages.cpp ----
 // Password rules: returns the messages of failed rules (empty = OK). No name or email part in it; different from old_pw when changing.
+// Runs on the typed password; the database only ever gets the hash (password_hash.h).
 vector<string> check_password(const string& pw, const string& name, const string& email, const string& old_pw);
 bool load_templates(const string& dir);                   // Loads all .html templates into memory (at startup); false if a required one is missing.
 // Template name + values: {{key}} = HTML-escaped, {{{key}}} = raw (only for HTML we built ourselves).
@@ -280,9 +283,10 @@ struct RoleResult {
 };
 
 RoleResult role_change(int admin_id, int user_id, const string& new_role);
-// Changes the password only if the old one is right; also ends all the user's other sessions (end_reason 'LOGOUT'),
-// keeping keep_session. All in one transaction.
-PasswordResult password_change(int user_id, const string& current, const string& new_pw, const string& keep_session);
+// Change a password. current_stored = the value now in the database (auth.cpp read it and verified the typed password),
+// new_hash = the new hash. The update only happens if the stored value is still the same. In the same transaction every
+// other session of this user except keep_session is ended (end_reason 'LOGOUT').
+PasswordResult password_change(int user_id, const string& current_stored, const string& new_hash, const string& keep_session);
 // One row in admin_actions per admin change (for changes outside a transaction).
 void admin_audit(int admin_id, const string& action, const string& details);
 // Many request_logs rows in one multi-row INSERT. Returns rows added, -1 on error.

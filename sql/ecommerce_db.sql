@@ -26,8 +26,10 @@ CREATE TABLE users (
     user_id    INT AUTO_INCREMENT PRIMARY KEY,
     email      VARCHAR(100) NOT NULL UNIQUE,
     name       VARCHAR(100) NOT NULL,
-    -- Stored exactly as typed (no hashing yet). The password RULES (length, upper/lower/digit/symbol ...) are NOT a CHECK here:
-    -- the server's check_password applies them to typed passwords, and a hashed password would not look like a typed one.
+    -- PBKDF2-SHA256 hash made by the server (include/password_hash.h): pbkdf2_sha256$<iterations>$<salt hex>$<hash hex>, ~120 chars.
+    -- Accounts made before hashing may still hold the typed password; the server re-saves it as a hash on their next login.
+    -- The password RULES (length, upper/lower/digit/symbol ...) are NOT a CHECK here: the server's check_password applies them
+    -- to typed passwords, and a hash does not look like a typed password.
     password   VARCHAR(255) NOT NULL,
     -- CUSTOMER = normal shopper (signup always creates this). ADMIN = can open /admin.
     -- Admins are made only with SQL (UPDATE users SET role = 'ADMIN' ...) or by another admin.

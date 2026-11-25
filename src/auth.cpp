@@ -1,12 +1,11 @@
-#include <winsock2.h>
-#include <windows.h>
-#include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
+#include "platform.h"   // secure_random, sleep_ms, local_time (Windows / Linux)
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 #include "common.h"
 #include "pages.h"
+#include "password_hash.h"   // hash_password / verify_password (PBKDF2): passwords are never stored as plain text
 using namespace std;
 
 // ---- forms ----
@@ -209,9 +208,15 @@ int signup_page(SOCKET client, const Request& req) {
     if (!errs.empty())
         return send_page(client, req, 400, "Sign up", signup_form(name, email, pw_problem ? &failed : nullptr), "", errors_flash(errs, pw_problem));
 
-    // The password is plain text for now (known limitation; hashing comes later).
+    // Only the hash goes into the database (password_hash.h), never the typed password. If hashing fails we do not create
+    // the account: saving plain text is never a fallback.
+    const string hashed = hash_password(pass);
+    if (hashed.empty()) {
+        log_tag("PAGE", "signup: password hashing failed");
+        return error_page(client, req, 500, "Could not create account");
+    }
     int code = 0;
-    int n = db_exec("INSERT INTO users (name, email, password) VALUES (?, ?, ?)", {name, email, pass}, &code);
+    int n = db_exec("INSERT INTO users (name, email, password) VALUES (?, ?, ?)", {name, email, hashed}, &code);
     if (n < 0) {
         if (code == 1062)   // Duplicate entry: the email already exists (UNIQUE).
             return send_page(client, req, 409, "Sign up", signup_form(name, email), "",
@@ -234,16 +239,36 @@ int login_page(SOCKET client, const Request& req) {
     string pass = field(req, "password");
     const string bad = "Invalid email or password.";   // Same message for a wrong email or a wrong password.
 
-    // BINARY: the password match is case-sensitive (a normal compare is not).
+    // Load the user and the saved password (hash) by email, then compare in C++ with verify_password. This used to be done in
+    // SQL with "AND BINARY password = ?", but the database cannot compare against a salted hash (every hash has its own salt).
     vector<vector<string>> rows;
-    if (!db_select("SELECT user_id FROM users WHERE email = ? AND BINARY password = ?", {email, pass}, rows))
+    if (!db_select("SELECT user_id, password FROM users WHERE email = ?", {email}, rows) || !cols_ok(rows, 2))
         return error_page(client, req, 500, "Database error");
+    bool ok = false;
     if (rows.empty()) {
+        // Unknown email: still do one hash, so "wrong email" is not answered faster than "wrong password"
+        // (otherwise timing the response would reveal which emails are registered).
+        static const string dummy = hash_password("not-a-real-password");
+        verify_password(pass, dummy);
+    } else {
+        ok = verify_password(pass, rows[0][1]);
+    }
+    if (!ok) {
         log_tag("PAGE", "login failed");
         return send_page(client, req, 401, "Login", login_form(email), "", flash_text("err", bad));
     }
-    if (!cols_ok(rows, 1)) return error_page(client, req, 500, "Database error");
     string uid = rows[0][0];             // Password rules are never checked at login: old passwords keep working.
+    const string stored = rows[0][1];
+
+    // Old account (plain text password) or a hash with fewer iterations: we have the typed password right now, so save a
+    // fresh hash. "AND BINARY password = <the value just read>" means a password changed in between is not overwritten.
+    // If this fails the login still goes ahead (it is tried again at the next login).
+    if (password_needs_rehash(stored)) {
+        const string fresh = hash_password(pass);
+        if (!fresh.empty() &&
+            db_exec("UPDATE users SET password = ? WHERE user_id = ? AND BINARY password = ?", {fresh, uid, stored}) == 1)
+            log_tag("PAGE", "user " + uid + ": password upgraded to " + (is_password_hash(stored) ? "more iterations" : "a hash"));
+    }
 
     string sid;
     if (!new_session_id(sid)) return error_page(client, req, 500, "Could not create session");
@@ -271,7 +296,8 @@ static string change_pw_form(const Request& req, const string& email, const vect
     return render("change_password", v);
 }
 
-// GET = form, POST = change. Login required; the old password must be right (password_change in db.cpp checks it).
+// GET = form, POST = change. Login required. The current password is verified here; the new one is hashed and handed to
+// password_change in db.cpp (which saves it and ends the other sessions in one transaction).
 int account_password_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "GET" && req.method != "POST") return method_not_allowed(client, req, "GET, POST");
@@ -301,7 +327,22 @@ int account_password_page(SOCKET client, const Request& req) {
     if (!errs.empty())
         return send_page(client, req, 400, "Change password", change_pw_form(req, email, failed.empty() ? nullptr : &failed), "", errors_flash(errs, true));
 
-    PasswordResult r = password_change(req.user_id, cur, pw, req.session_id);
+    // Is the current password right? Compare with the saved hash (old plain text accounts work too, see verify_password).
+    const string wrong_cur = "Current password is incorrect.";
+    rows.clear();
+    if (!db_select("SELECT password FROM users WHERE user_id = ?", {to_string(req.user_id)}, rows) || !cols_ok(rows, 1))
+        return error_page(client, req, 500, "Database error");
+    if (rows.empty() || !verify_password(cur, rows[0][0]))
+        return send_page(client, req, 403, "Change password", change_pw_form(req, email), "", flash_text("err", wrong_cur));
+    const string hashed = hash_password(pw);
+    if (hashed.empty()) {
+        log_tag("PAGE", "password change: hashing failed for user " + to_string(req.user_id));
+        return error_page(client, req, 500, "Could not change password");
+    }
+
+    // Pass password_change the saved value we just read: it runs "UPDATE ... WHERE BINARY password = <saved>", so if someone
+    // changed the password in between, 0 rows match -> 403 and nothing changes (the same atomic check as before).
+    PasswordResult r = password_change(req.user_id, rows[0][0], hashed, req.session_id);
     if (r.status == 200) {
         log_tag("PAGE", "user " + to_string(req.user_id) + " changed the password, " + to_string(r.ended) + " other sessions ended");
         return redirect(client, req, "/account/password?ok=1");

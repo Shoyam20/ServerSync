@@ -1,0 +1,11 @@
+# keep secrets and Windows build output out of the Docker image
+.git
+db.conf
+*.pem
+*.exe
+*.dll
+server
+docs
+sql
+old
+*.txt

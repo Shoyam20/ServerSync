@@ -1,0 +1,21 @@
+# Builds the Linux version the same way Render does (Dockerfile), so a broken build shows up here
+# before anyone presses "Deploy" on Render.
+name: linux build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# a newer push to the same branch cancels the older run that is still going
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build (same Dockerfile as Render)
+        run: docker build -t serversync .

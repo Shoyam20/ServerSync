@@ -1,7 +1,5 @@
 
-#include <winsock2.h>
-#include <windows.h>
-#include <bcrypt.h>      // BCryptGenRandom: the OS secure random number generator.
+#include "platform.h"   // secure_random (BCryptGenRandom / getrandom), sleep_ms, local_time
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -415,7 +413,7 @@ void clear_category_cache() {
 // 32 random bytes -> 64 hex characters. Not rand(): it is guessable; BCryptGenRandom is not.
 bool new_session_id(string& out) {
     unsigned char raw[32];
-    if (BCryptGenRandom(nullptr, raw, sizeof(raw), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return false;
+    if (!secure_random(raw, sizeof(raw))) return false;
     const char* hex = "0123456789abcdef";
     out = "";
     for (int i = 0; i < 32; i++) {
@@ -597,6 +595,14 @@ int route(SOCKET client, Request& req) {
     if (req.path == "/metrics") return metrics_page(client, req, false);
     if (req.path == "/metrics.json") return metrics_page(client, req, true);
 
+    // /healthz: Render (or any uptime monitor) asks "is the server alive?". It only shows that a worker thread answers:
+    // no database, session or template is touched, so it comes before load_user. It reveals no internal numbers (unlike /metrics).
+    if (req.path == "/healthz") {
+        if (req.method != "GET" && req.method != "HEAD") return method_not_allowed(client, req, "GET, HEAD");
+        send_response(client, 200, "text/plain; charset=utf-8", "ok\n", "Cache-Control: no-store\r\n");
+        return 200;
+    }
+
     load_user(req);                     // First find out who it is (on every request).
     const string& path = req.path;
 
@@ -627,7 +633,7 @@ int route(SOCKET client, Request& req) {
     // Debug routes: without DEBUG_ROUTES=1 they are not matched and fall through to 404.
     if (path == "/test" && debug_routes_on()) return test_page(client, req);
     if (path == "/slow" && debug_routes_on()) {
-        Sleep(3000);
+        sleep_ms(3000);
         send_response(client, 200, HTML, render("plain", {{"message", "done"}}), with_cookie_fix(req, ""));
         return 200;
     }

@@ -3,5 +3,8 @@ host=localhost
 user=your_mysql_user
 password=your_mysql_password
 database=ecommerce_db
-# optional (default 3306)
+# optional (default 3306). Aiven ka port alag hota hai: service ke Overview page se lo
 port=3306
+# optional: cloud MySQL (Aiven) ke liye CA certificate ka path. Set ho to SSL zaroori aur certificate check hota hai.
+# Render par: ca.pem ko Secret File banao, phir ssl_ca=/etc/secrets/ca.pem
+# ssl_ca=ca.pem
