@@ -253,6 +253,15 @@ int main() {
     check("HEAD /healthz -> 200", to_string(get("/healthz", "34.82.10.1", "HEAD")), "200");
     check("POST /healthz -> 405", to_string(get("/healthz", "34.82.10.1", "POST")), "405");
 
+    // ---- debug routes switched off (test_pages_helpers.py runs this program a second time with DISABLE_TEST_ROUTES=1) ----
+    // Only checked in that second run: with the routes on, /slow would sleep for 3 seconds.
+    const char* off = getenv("DISABLE_TEST_ROUTES");
+    if (off != nullptr && string(off) == "1") {
+        for (const char* p : {"/test", "/slow", "/dbtest", "/dbslow"})
+            check(string("DISABLE_TEST_ROUTES=1: ") + p + " -> 404", to_string(get(p, "34.82.10.1")), "404");
+        check("DISABLE_TEST_ROUTES=1: /healthz still 200", to_string(get("/healthz", "34.82.10.1")), "200");
+    }
+
     // ---- sold-out products: disabled button in the page, and the server refuses /cart/add ----
     string soldout = product_card({"7", "Gadget", "Audio", "499.00", "0", "Nice"}, "/products", true);
     check("stock 0: card has a disabled 'Out of stock' button", soldout.find("<button disabled>Out of stock</button>") != string::npos ? "yes" : "no", "yes");

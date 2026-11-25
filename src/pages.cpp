@@ -2901,6 +2901,15 @@ static int admin_route(SOCKET client, const Request& req) {
     return error_page(client, req, 404, "404 Not Found");
 }
 
+// True unless the environment variable DISABLE_TEST_ROUTES is "1". Read once and cached (the environment does not change).
+static bool test_routes_on() {
+    static const bool on = [] {
+        const char* v = getenv("DISABLE_TEST_ROUTES");
+        return v == nullptr || string(v) != "1";
+    }();
+    return on;
+}
+
 // path ke hisaab se page bhejo; status code return karta hai
 int route(SOCKET client, Request& req) {
     // /metrics ko login/session ki zaroorat nahi (aur DB ki bhi nahi): load_user se pehle
@@ -2941,16 +2950,18 @@ int route(SOCKET client, Request& req) {
     if (path == "/orders") return orders_page(client, req);
     if (path == "/order") return order_page(client, req);
     if (path == "/order/cancel") return order_cancel_page(client, req);
-    if (path == "/test") return test_page(client, req);
-
-    // neeche ke do route sirf testing ke liye
-    if (path == "/slow") {
-        sleep_ms(3000);
-        send_response(client, 200, HTML, render("plain", {{"message", "done"}}), with_cookie_fix(req, ""));
-        return 200;
+    // Debug / load-testing routes. On by default for local work and the tests; the Dockerfile sets DISABLE_TEST_ROUTES=1 so
+    // the public deploy answers 404 (/dbslow holds a pool connection for 2 s, and /test echoes request headers).
+    if (test_routes_on()) {
+        if (path == "/test") return test_page(client, req);
+        if (path == "/slow") {
+            sleep_ms(3000);
+            send_response(client, 200, HTML, render("plain", {{"message", "done"}}), with_cookie_fix(req, ""));
+            return 200;
+        }
+        if (path == "/dbtest") return db_test_page(client, req, "Products in database", "SELECT COUNT(*) FROM products");
+        if (path == "/dbslow") return db_test_page(client, req, "Slept 2 seconds", "SELECT SLEEP(2)");
     }
-    if (path == "/dbtest") return db_test_page(client, req, "Products in database", "SELECT COUNT(*) FROM products");
-    if (path == "/dbslow") return db_test_page(client, req, "Slept 2 seconds", "SELECT SLEEP(2)");
 
     return error_page(client, req, 404, "404 Not Found");
 }

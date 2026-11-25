@@ -35,6 +35,15 @@ try:
         print("FAIL metrics.json is not valid JSON:", e, js[:1])
         extra_fails += 1
     code = 1 if (r.returncode != 0 or extra_fails or "FAIL " in r.stdout.replace("FAILURES", "")) else 0
+
+    # second run with the debug routes switched off, the way the Docker image runs on Render
+    env = dict(os.environ, DISABLE_TEST_ROUTES="1")
+    r2 = subprocess.run([exe], capture_output=True, text=True, encoding="utf-8", cwd=ROOT, env=env)
+    off_lines = [l for l in r2.stdout.splitlines() if "DISABLE_TEST_ROUTES=1" in l]
+    for l in off_lines:
+        print(l)
+    if r2.returncode != 0 or len(off_lines) != 5 or any(l.startswith("FAIL ") for l in off_lines):
+        code = 1
 finally:
     for f in os.listdir(tmp):               # only the temp folder created above
         os.remove(os.path.join(tmp, f))
