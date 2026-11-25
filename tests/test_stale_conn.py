@@ -2,7 +2,7 @@
 # never your real database, never db.conf). MySQL closes idle connections (wait_timeout) and drops them all on a restart; the pool must
 # notice, log it and open a fresh connection instead of failing the next request.
 #     python tests\test_stale_conn.py
-import os, subprocess, sys
+import os, re, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import throwaway_mysql as t
 
@@ -65,7 +65,11 @@ finally:
 SRC = open(os.path.join(ROOT, "src", "db.cpp"), encoding="utf-8").read()
 check("open_conn() is the only place that opens a MySQL connection (init_db and get_conn use it)",
       SRC.count("mysql_real_connect(") == 1 and "MYSQL* m = open_conn();" in SRC and "MYSQL* fresh = open_conn();" in SRC)
-check("no DB_* environment variables and no Linux-only code were added", "getenv" not in SRC and "#ifdef" not in SRC and "/dev/urandom" not in SRC)
+# The Render deploy added DB_* environment variables on purpose (load_env_conf), so the old "no getenv" rule is gone.
+# What still holds: no platform #ifdefs in db.cpp (they live in platform.h) and only DB_* variables are read here.
+check("db.cpp has no platform #ifdef / Linux-only code, and only reads DB_* environment variables",
+      "#ifdef" not in SRC and "/dev/urandom" not in SRC
+      and all(v.startswith("DB_") for v in re.findall(r'getenv\("([A-Za-z_]+)"\)', SRC)), re.findall(r'getenv\("([A-Za-z_]+)"\)', SRC))
 gi = open(os.path.join(ROOT, ".gitignore"), encoding="utf-8").read().split()
 check(".gitignore has libmysql.dll, /admin.txt, /c.txt, /race.txt and old/ (db.conf, server.exe stay ignored)",
       all(x in gi for x in ("libmysql.dll", "/admin.txt", "/c.txt", "/race.txt", "old/", "db.conf", "server.exe")))
