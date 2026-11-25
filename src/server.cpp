@@ -370,19 +370,26 @@ const StaticFile* find_static(const string& name) {
     return it == static_files.end() ? nullptr : &it->second;
 }
 
-// GET /static/<name>, served from memory (no disk read). Returns the status.
+// GET or HEAD /static/<name>, served from memory (no disk read). Returns the status.
+// HEAD gets exactly the same headers as GET (Content-Length included) but no body; browsers, curl -I and
+// link checkers use it to see if a file exists and how big it is without downloading it.
 static int serve_static(SOCKET client, const Request& req) {
-    if (req.method != "GET") {
-        send_response(client, 405, "text/plain; charset=utf-8", "Method Not Allowed", "Allow: GET\r\n");
+    const bool head = req.method == "HEAD";
+    if (req.method != "GET" && !head) {
+        send_response(client, 405, "text/plain; charset=utf-8", "Method Not Allowed", "Allow: GET, HEAD\r\n");
         return 405;
     }
     const StaticFile* f = find_static(req.path.substr(8));      // Skip the 8 characters of "/static/".
     if (f == nullptr) {
-        send_response(client, 404, "text/plain; charset=utf-8", "Not Found");
+        const string text = "Not Found";
+        if (head) send_all(client, response_head(404, "text/plain; charset=utf-8", text.size(), ""));   // HEAD: never a body
+        else send_response(client, 404, "text/plain; charset=utf-8", text);
         return 404;
     }
     // The browser may cache it for one hour.
-    send_response(client, 200, f->type, f->data, "Cache-Control: max-age=3600\r\n");
+    const string cache = "Cache-Control: max-age=3600\r\n";
+    if (head) send_all(client, response_head(200, f->type, f->data.size(), cache));
+    else send_response(client, 200, f->type, f->data, cache);
     return 200;
 }
 
