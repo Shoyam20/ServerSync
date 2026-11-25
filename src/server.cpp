@@ -256,9 +256,12 @@ static string reason(int status) {
     if (status == 403) return "Forbidden";
     if (status == 404) return "Not Found";
     if (status == 405) return "Method Not Allowed";
-    if (status == 409) return "Conflict";
     if (status == 408) return "Request Timeout";
+    if (status == 409) return "Conflict";
+    if (status == 413) return "Payload Too Large";                 // body bigger than MAX_BODY
+    if (status == 431) return "Request Header Fields Too Large";   // headers bigger than MAX_HEADER
     if (status == 500) return "Internal Server Error";
+    if (status == 501) return "Not Implemented";                   // Transfer-Encoding (chunked) is not supported
     if (status == 503) return "Service Unavailable";
     return "Unknown";
 }
