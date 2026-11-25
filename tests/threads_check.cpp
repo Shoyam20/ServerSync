@@ -23,6 +23,7 @@ int db_free_connections() { return 3; }
 void db_thread_start() {}
 void db_thread_end() {}
 int close_expired_sessions() { return 0; }
+int deliver_due_orders() { return 0; }     // the delivery thread (threads.cpp) calls this; no orders in this test
 
 // the request handler: job.ip = "<status>:<sleep ms>" tells it what to do
 RequestInfo handleClient(const ClientJob& job) {
