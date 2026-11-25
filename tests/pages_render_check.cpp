@@ -50,10 +50,12 @@ void put_conn(int) {}
 bool db_select(const string& sql, const vector<string>&, vector<vector<string>>& rows, int*) { answer(sql, rows); return true; }
 bool db_select_on(MYSQL*, const string& sql, const vector<string>&, vector<vector<string>>& rows, int*) { answer(sql, rows); return true; }
 static string last_exec_sql, last_exec_args;     // what the last db_exec got (args joined with |), for the password checks
+static string rehash_sql, rehash_args;           // the last "UPDATE users SET password" (login stores a session right after it)
 int db_exec(const string& sql, const vector<string>& args, int* err) {
     last_exec_sql = sql;
     last_exec_args.clear();
     for (size_t i = 0; i < args.size(); i++) last_exec_args += (i ? "|" : "") + args[i];
+    if (sql.find("UPDATE users SET password") != string::npos) { rehash_sql = sql; rehash_args = last_exec_args; }
     if (err) *err = fake_exec_code;
     return fake_exec_result;
 }
@@ -753,15 +755,15 @@ int main() {
     // The page reads (user_id, saved password) by email and checks it with verify_password.
     // Old account with a plain text password: login works and the password is re-saved as a hash
     fake = {{"FROM users WHERE email", {{"5", "Pass@1234"}}}};
-    last_exec_args = "";
+    rehash_sql = rehash_args = "";
     run("pw_login_weak", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "Pass@1234"}}));
-    cout << "REHASH_SQL " << last_exec_sql << endl;
-    cout << "REHASH_ARGS " << last_exec_args << endl;
+    cout << "REHASH_SQL " << rehash_sql << endl;
+    cout << "REHASH_ARGS " << rehash_args << endl;
     // new account: the saved value is already a hash -> login works, nothing is re-saved
     fake = {{"FROM users WHERE email", {{"5", hash_password("Zx9#kLm2Qw")}}}};
-    last_exec_sql = "";
+    rehash_sql = rehash_args = "";
     run("pw_login_strong", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "Zx9#kLm2Qw"}}));
-    cout << "HASHED_LOGIN_EXEC " << (last_exec_sql.find("UPDATE users SET password") == string::npos ? "none" : "rehash") << endl;
+    cout << "HASHED_LOGIN_EXEC " << (rehash_sql.empty() ? "none" : "rehash") << endl;
     run("pw_login_hashed_wrong", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "Zx9#kLm2Qx"}}));
     fake = {{"FROM users WHERE email", {}}};
     run("pw_login_wrong", mk("POST", "/login", false, {{"email", "ann@x.com"}, {"password", "weak"}}));
