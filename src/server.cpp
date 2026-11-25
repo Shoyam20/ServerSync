@@ -210,27 +210,28 @@ static int recv_more(SOCKET client, string& data) {
     return READ_OK;
 }
 
-// Reads one full request: READ_OK, READ_GONE, 400 (bad or too big) or 408 (timeout).
+// Reads one full request. Returns READ_OK, READ_GONE, or an HTTP error status:
+// 400 malformed, 408 timeout, 413 body too big, 431 headers too big, 501 chunked body (not supported).
 static int read_request(SOCKET client, Request& req) {
     // TCP is a byte stream: keep reading until the blank line that ends the headers.
     string raw;
     size_t end;
     while ((end = raw.find("\r\n\r\n")) == string::npos) {
-        if (raw.size() > MAX_HEADER) return 400;     // Header size limit.
+        if (raw.size() > MAX_HEADER) return 431;     // Header size limit.
         int r = recv_more(client, raw);
         if (r != READ_OK) return r;
     }
-    if (end + 4 > MAX_HEADER) return 400;
+    if (end + 4 > MAX_HEADER) return 431;
 
     string body = raw.substr(end + 4);               // Body bytes that arrived together with the headers.
     if (!parse_request(raw.substr(0, end), req)) return 400;
 
     // Body size comes from Content-Length.
-    if (req.headers.count("transfer-encoding")) return 400;     // Chunked bodies are not supported.
+    if (req.headers.count("transfer-encoding")) return 501;     // Chunked bodies are not supported.
     size_t len = 0;
     if (req.headers.count("content-length")) {
-        if (!to_number(req.headers["content-length"], len)) return 400;
-        if (len > MAX_BODY) return 400;
+        if (!to_number(req.headers["content-length"], len)) return 400;   // not a number: malformed
+        if (len > MAX_BODY) return 413;
     }
 
     while (body.size() < len) {
