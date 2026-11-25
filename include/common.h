@@ -24,8 +24,8 @@ const int PW_MIN_LEN = 8;                 // password ki min lambai (characters)
 const int PW_MAX_LEN = 64;                // password ki max lambai (characters)
 const int MAX_ADDRESSES = 10;            // ek user ke max active shipping addresses
 const int CHECKOUT_RETRIES = 3;           // deadlock (1213) / lock wait timeout (1205) par transaction kitni baar try karna
-const int DB_CONNECT_TRIES = 5;           // startup par MySQL se connect kitni baar try karna (cloud DB jaagne me time leta hai)
-const int DB_CONNECT_WAIT_SECONDS = 5;    // pehli fail ke baad itna wait, phir har baar isse ek guna aur (5, 10, 15, 20 s)
+const int DB_CONNECT_TRIES = 5;           // how many times to try connecting to MySQL at startup (a sleeping cloud DB needs time to wake up)
+const int DB_CONNECT_WAIT_SECONDS = 5;    // wait after the first failure; each later wait adds this much again (5, 10, 15, 20 s)
 
 // auto shipment tracking: delivery thread order ko PLACED -> PACKED -> SHIPPED -> OUT_FOR_DELIVERY -> DELIVERED le jata hai
 const int AUTO_DELIVERY = 1;              // 1 = delivery thread chalu, 0 = band (admin hi status badlega)
@@ -192,7 +192,7 @@ void send_response(SOCKET client, int status, const string& type, const string& 
 
 // ---- pages.cpp ----
 // password ke niyam: fail hue niyamon ke messages (khali = theek). name / email / old_pw se: password me naam ya email ka hissa
-// nahi, aur badalte waqt purane jaisa nahi (old_pw "" = signup / login: yeh niyam nahi lagta). Yeh typed password par chalta hai; DB me sirf hash jaata hai (password_hash.h)
+// nahi, aur badalte waqt purane jaisa nahi (old_pw "" = signup / login: yeh niyam nahi lagta). Runs on the typed password; the database only ever gets the hash (password_hash.h)
 vector<string> check_password(const string& pw, const string& name, const string& email, const string& old_pw);
 bool load_templates(const string& dir);                   // dir ki saari .html templates memory me (startup par); sab zaroori mili?
 // template ka naam + values: {{key}} -> HTML-escaped value, {{{key}}} -> jaisa hai waisa (sirf hamare banaye HTML ke liye)
@@ -288,9 +288,9 @@ struct RoleResult {
     string from;                    // purana role (log ke liye)
 };
 RoleResult role_change(int admin_id, int user_id, const string& new_role);
-// password badlo: current_stored = DB me abhi jo value hai (pages.cpp ne padh kar verify ki), new_hash = naya hash.
-// DB me value tab tak wahi ho tabhi badlegi; saath me keep_session ke siva is user ke baaki sab sessions band
-// (end_reason 'LOGOUT'): sab ek transaction me
+// Change a password. current_stored = the value now in the database (pages.cpp read it and verified the typed password),
+// new_hash = the new hash. The update only happens if the stored value is still the same. In the same transaction every
+// other session of this user except keep_session is ended (end_reason 'LOGOUT').
 PasswordResult password_change(int user_id, const string& current_stored, const string& new_hash, const string& keep_session);
 // admin ke har badlav ki ek row admin_actions me (transaction ke bahar wale badlavon ke liye)
 void admin_audit(int admin_id, const string& action, const string& details);

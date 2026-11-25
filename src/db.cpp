@@ -156,8 +156,8 @@ bool init_db() {
         return false;
     }
 
-    // Cloud DB (Aiven free plan) so raha ho ya abhi start ho raha ho to pehla connect fail hota hai. Turant band hone ke bajaye
-    // kuch baar ruk kar dobara koshish: har baar thoda zyada wait (5 s, 10 s, 15 s ...). Pool aadha bana ho to pehle wo band karo
+    // A cloud DB (Aiven free plan) that is asleep or still starting makes the first connect fail. Instead of exiting at once,
+    // wait and try again a few times, a little longer each time (5 s, 10 s, 15 s ...). Close a half-built pool before retrying.
     bool ready = false;
     for (int attempt = 1; attempt <= DB_CONNECT_TRIES && !ready; attempt++) {
         ready = true;
@@ -1097,9 +1097,10 @@ AddressResult address_delete(int user_id, int address_id) {
 }
 
 // ---- password badalna: ek DB transaction ----
-// DB me password ka hash rehta hai (password_hash.h). Hash banana aur typed password verify karna pages.cpp karta hai (CPU ka kaam,
-// DB connection pakde bina); yahan sirf saved value badalti hai. Niyam (8-64 characters, upper/lower/digit/special ...) pages.cpp ka
-// check_password dekhta hai, DB ke CHECK me nahi: wo sirf typed password par lagte hain, hash me wo shakal rehti hi nahi.
+// The database stores a password hash (password_hash.h). Hashing and verifying the typed password happen in pages.cpp
+// (CPU work, done without holding a DB connection); this code only replaces the stored value. The rules (8-64 characters,
+// upper/lower/digit/special ...) are checked by check_password in pages.cpp, not by a CHECK in the database: they apply to
+// the typed password, and a hash does not look like one.
 static int pw_fail(int err, PasswordResult& r) {
     r.status = (err == 1213 || err == 1205) ? 503 : 500;
     r.message = r.status == 503 ? "The shop is busy right now. Please try again in a moment." : "Database error";
@@ -1107,9 +1108,9 @@ static int pw_fail(int err, PasswordResult& r) {
 }
 
 // Transaction ke andar:
-//  1) UPDATE ... WHERE user_id = ? AND BINARY password = <current_stored>: "value abhi bhi wahi hai jo pages.cpp ne verify ki" ki
-//     jaanch aur badlav ek hi statement me, to beech me kisi aur ke badalne ka gap nahi. 0 rows = value badal chuki / user nahi -> 403.
-//     (BINARY: byte-by-byte compare, capital/small ka farq bhi)
+//  1) UPDATE ... WHERE user_id = ? AND BINARY password = <current_stored>: checking "the value is still the one pages.cpp
+//     verified" and changing it happen in one statement, so nobody can change it in between. 0 rows = the value changed or
+//     the user is gone -> 403. (BINARY: byte-by-byte compare, case-sensitive)
 //  2) is user ke baaki sab active sessions band (end_reason 'LOGOUT'), sirf abhi wala session (keep_session) chalta rehta hai.
 //  Dono saath hi pakke hote hain ya saath hi nahi: password badle aur purane session zinda rahein, aisa kabhi nahi
 static int pw_steps(MYSQL* m, int user_id, const string& current, const string& new_pw, const string& keep_session, PasswordResult& r, int& err) {
