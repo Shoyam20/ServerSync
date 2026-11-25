@@ -58,4 +58,21 @@ You need MinGW-w64 g++ with C++20 support and MySQL Server 8.0 (8.0.16 or newer,
 5. **Make yourself admin**: sign up on the site, then run
    `UPDATE users SET role = 'ADMIN' WHERE email = '<your email>';` in MySQL.
 
-Stop the server with Ctrl+C; it finishes the requests in progress and flushes the request log first.
+Stop the server with Ctrl+C: it stops the worker threads and flushes the request log to MySQL before exiting.
+
+## Run it on Linux / Docker
+
+```
+make                      # needs g++, libmysqlclient-dev and libssl-dev
+./server                  # reads db.conf, or the DB_* environment variables (see DEPLOY.md)
+```
+
+or with Docker, exactly like Render builds it:
+
+```
+docker build -t serversync .
+docker run -p 8080:8080 -e DB_HOST=... -e DB_PORT=... -e DB_USER=... -e DB_PASSWORD=... serversync
+```
+
+The Docker image turns the debug routes (`/test`, `/slow`, `/dbtest`, `/dbslow`) off with `DISABLE_TEST_ROUTES=1`.
+Deploying to Render + Aiven step by step is in [DEPLOY.md](DEPLOY.md).
