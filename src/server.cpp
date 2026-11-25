@@ -405,12 +405,14 @@ RequestInfo handle_client(const ClientJob& job) {
         info.method = "-";              // The request was never fully read.
         info.path = "-";
         log_msg_verbose("timeout -> 408");
-    } else if (r == 400) {
-        send_response(client, 400, "text/html; charset=utf-8", render_error_page("400 Bad Request"));
-        info.status = 400;
+    } else if (r > 0) {
+        // Any other error status from read_request (400 bad request, 413 / 431 too big, 501 chunked body):
+        // send the error page with that status and its text, e.g. "413 Payload Too Large".
+        send_response(client, r, "text/html; charset=utf-8", render_error_page(to_string(r) + " " + reason(r)));
+        info.status = r;
         info.method = req.method.empty() ? "-" : req.method;   // If the request line was valid, method and path are known.
         info.path = req.path.empty() ? "-" : req.path;
-        log_msg_verbose("bad request -> 400");
+        log_msg_verbose("bad request -> " + to_string(r));
     } else {
         log_msg_verbose("client left early");   // Client left: nothing to send (status 0 = not logged).
     }
