@@ -245,6 +245,14 @@ int main() {
     check("empty address is not local", to_string(get("/metrics", "")), "403");
     check("POST /metrics from localhost -> 405", to_string(get("/metrics", "127.0.0.1", "POST")), "405");
 
+    // ---- /healthz (Render health check): works from anywhere, never needs the database (db_select here always fails) ----
+    check("healthz from any address -> 200", to_string(get("/healthz", "34.82.10.1")), "200");
+    check("healthz body is just ok", sent_body == "ok\n" ? "yes" : "no", "yes");
+    check("healthz is plain text", sent_type, "text/plain; charset=utf-8");
+    check("healthz is not cached", sent_extra.find("Cache-Control: no-store") != string::npos ? "yes" : "no", "yes");
+    check("HEAD /healthz -> 200", to_string(get("/healthz", "34.82.10.1", "HEAD")), "200");
+    check("POST /healthz -> 405", to_string(get("/healthz", "34.82.10.1", "POST")), "405");
+
     // ---- sold-out products: disabled button in the page, and the server refuses /cart/add ----
     string soldout = product_card({"7", "Gadget", "Audio", "499.00", "0", "Nice"}, "/products", true);
     check("stock 0: card has a disabled 'Out of stock' button", soldout.find("<button disabled>Out of stock</button>") != string::npos ? "yes" : "no", "yes");

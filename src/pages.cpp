@@ -2907,6 +2907,14 @@ int route(SOCKET client, Request& req) {
     if (req.path == "/metrics") return metrics_page(client, req, false);
     if (req.path == "/metrics.json") return metrics_page(client, req, true);
 
+    // /healthz: Render (ya koi bhi uptime monitor) puchta hai "server zinda hai?". Sirf itna ki worker thread jawab de raha hai:
+    // DB, session, template kuch nahi chhoota, isliye load_user se pehle. Koi andar ka number bhi nahi bataata (metrics jaisa nahi)
+    if (req.path == "/healthz") {
+        if (req.method != "GET" && req.method != "HEAD") return method_not_allowed(client, req, "GET, HEAD");
+        send_response(client, 200, "text/plain; charset=utf-8", "ok\n", "Cache-Control: no-store\r\n");
+        return 200;
+    }
+
     load_user(req);                     // pehle dekho kaun hai (har request par)
     const string& path = req.path;
 
