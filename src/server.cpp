@@ -77,7 +77,6 @@ static int hex_value(char c) {
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return -1;
-    
 }
 
 // "+" is a space, %xx is a byte; a bad %xx or %00 is rejected.
@@ -96,8 +95,7 @@ static bool url_decode(const string& in, string& out) {
             if (b == 0) return false;               // Refuse NUL bytes (they can cut strings short).
             out += b;
             i += 2;
-        } else 
-        {
+        } else {
             out += c;
         }
     }
@@ -126,8 +124,7 @@ static bool parse_query(const string& query, map<string, string>& params) {
 }
 
 // Parses the request line, e.g. GET /path HTTP/1.1.
-static bool parse_request_line(const string& line, Request& req) 
-{
+static bool parse_request_line(const string& line, Request& req) {
     size_t a = line.find(' ');
     if (a == string::npos) return false;
     size_t b = line.find(' ', a + 1);
