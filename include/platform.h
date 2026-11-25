@@ -34,8 +34,9 @@ inline bool secure_random(unsigned char* buf, unsigned long n) {
     return BCryptGenRandom(nullptr, buf, n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
 }
 
-// PBKDF2-HMAC-SHA256 (password hashing, password_hash.h dekho). Windows ka apna bcrypt.dll: koi nayi library nahi chahiye,
-// -lbcrypt pehle se link hota hai. HMAC flag zaroori hai, warna provider plain SHA-256 deta hai jo PBKDF2 me nahi chalta
+// PBKDF2-HMAC-SHA256 for password hashing (see password_hash.h). Uses Windows' own bcrypt.dll, so no new library is needed:
+// -lbcrypt is already linked for session ids. The HMAC flag is required, otherwise the provider is plain SHA-256,
+// which PBKDF2 cannot use.
 inline bool pbkdf2_sha256(const std::string& pw, const unsigned char* salt, unsigned long salt_len, unsigned long iterations,
                           unsigned char* out, unsigned long out_len) {
     BCRYPT_ALG_HANDLE alg = nullptr;
@@ -95,8 +96,8 @@ inline bool secure_random(unsigned char* buf, unsigned long n) {
     return true;
 }
 
-// PBKDF2-HMAC-SHA256: Linux par OpenSSL ka libcrypto (Makefile me -lcrypto). libmysqlclient khud OpenSSL use karta hai,
-// to server image me yeh library pehle se hoti hai
+// PBKDF2-HMAC-SHA256 for password hashing: OpenSSL's libcrypto on Linux (-lcrypto in the Makefile).
+// libmysqlclient already depends on OpenSSL, so the library is in the server image anyway.
 inline bool pbkdf2_sha256(const std::string& pw, const unsigned char* salt, unsigned long salt_len, unsigned long iterations,
                           unsigned char* out, unsigned long out_len) {
     return PKCS5_PBKDF2_HMAC(pw.data(), (int)pw.size(), salt, (int)salt_len, (int)iterations, EVP_sha256(),

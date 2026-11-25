@@ -11,7 +11,7 @@ import throwaway_mysql as t
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MYSQL_DIR = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # CI ya dusri jagah install ho to MYSQL_DIR set karo
+MYSQL_DIR = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # set MYSQL_DIR if MySQL is installed somewhere else (CI does)
 work = tempfile.mkdtemp(prefix="serversync_password_")
 fails = 0
 

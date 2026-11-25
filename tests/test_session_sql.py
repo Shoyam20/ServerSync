@@ -6,7 +6,7 @@
 import os, re, shutil, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASE = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # CI ya dusri jagah install ho to MYSQL_DIR set karo
+BASE = os.environ.get("MYSQL_DIR", r"C:\Program Files\MySQL\MySQL Server 8.0")   # set MYSQL_DIR if MySQL is installed somewhere else (CI does)
 MYSQLD, MYSQL, MYSQLADMIN = (os.path.join(BASE, "bin", n) for n in ("mysqld.exe", "mysql.exe", "mysqladmin.exe"))
 PORT = "3399"
 CONN = ["--host=127.0.0.1", "--port=" + PORT, "--user=root"]
