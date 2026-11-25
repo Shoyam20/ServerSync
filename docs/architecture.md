@@ -25,7 +25,7 @@ browser ──TCP──> accept loop (main thread)
                worker thread (one of 4)
                     │  read_request: headers <= 8 KB, body <= 1 MB, else 4xx
                     │  /static/... -> file from memory (public/)
-                    │  everything else -> route() in pages.cpp
+                    │  everything else -> route() in pages.cpp (pages in auth/shop/cart/checkout/admin.cpp)
                     │       load_user: session cookie -> user, and slide the session expiry
                     │       page code: get_conn() from the pool, queries, put_conn()
                     │       render template -> send_response

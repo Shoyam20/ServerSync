@@ -7,7 +7,7 @@
 // - iterations: makes hashing deliberately slow, so every guess is expensive if the database ever leaks.
 //   The number is stored inside the hash, so it can be raised later: old hashes keep working and are re-made
 //   with the new number at the user's next login (password_needs_rehash).
-// - Users created before hashing still have a plain text password. verify_password accepts those too, and pages.cpp
+// - Users created before hashing still have a plain text password. verify_password accepts those too, and auth.cpp
 //   replaces them with a hash right after a successful login, so no migration script is needed.
 //
 // Why PBKDF2: it is already available on Windows (bcrypt.dll) and Linux (OpenSSL), so no new library is needed.

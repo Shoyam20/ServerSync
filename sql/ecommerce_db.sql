@@ -2,12 +2,12 @@
 -- Import it as described in sql/README.md (use --default-character-set=utf8mb4: the data has the rupee sign and '&').
 --
 -- WARNING: it starts with DROP DATABASE IF EXISTS, so running it again wipes the database and rebuilds it from zero.
---
+
 -- What it creates (15 tables):
 --   users, user_sessions, categories, products, cart, cart_items, orders, order_status_history, order_items,
 --   payments, request_logs, admin_actions, states, addresses, order_addresses
 -- Seed data: 15 categories, 52 products, 36 states / union territories. No users, no orders (signup creates users).
---
+
 -- Needs MySQL 8.0.16 or newer (CHECK constraints are ignored by older versions).
 
 SET NAMES utf8mb4;

@@ -1,301 +1,296 @@
-// common.h - shared settings, structs aur function declarations (saare modules yahi use karte hain)
-// Owner: Shoyam20
 #pragma once
-#include "platform.h"   // SOCKET type aur Windows/Linux ka farq (winsock2.h ya POSIX sockets)
+#include "platform.h"   // SOCKET type and the Windows / Linux differences (winsock2.h or POSIX sockets)
 #include <string>
 #include <map>
 #include <vector>
 using namespace std;
 
-struct MYSQL;   // MySQL ka type; poora mysql.h sirf db.cpp me chahiye
+struct MYSQL;   // The real mysql.h is only needed in db.cpp.
 
 // ---- settings ----
 const int PORT = 8080;
-const int WORKERS = 4;                    // worker threads ki ginti
-const int QUEUE_SIZE = 16;                // queue me max kitne clients wait kar sakte hain
-const int DB_POOL = 4;                    // MySQL connections ki ginti (pool size)
-const int MAX_HEADER = 8 * 1024;          // headers ka max size (8 KB)
-const int MAX_BODY = 1024 * 1024;         // body ka max size (1 MB)
-const int RECV_TIMEOUT_MS = 5000;         // slow client ko 5 sec se zyada wait nahi
-const int SESSION_MINUTES = 60;           // login session kitne minute chalega
-const int CLEANUP_SECONDS = 60;           // expired sessions band karne wala thread kitni der baad chalega
-const int MAX_CART_QTY = 10;              // ek product ki cart me max quantity
-const int PW_MIN_LEN = 8;                 // password ki min lambai (characters)
-const int PW_MAX_LEN = 64;                // password ki max lambai (characters)
-const int MAX_ADDRESSES = 10;            // ek user ke max active shipping addresses
-const int CHECKOUT_RETRIES = 3;           // deadlock (1213) / lock wait timeout (1205) par transaction kitni baar try karna
+const int WORKERS = 4;                    // Worker threads.
+const int QUEUE_SIZE = 16;                // Max clients waiting in the queue.
+const int DB_POOL = 4;                    // MySQL connections (pool size).
+const int MAX_HEADER = 8 * 1024;          // Max header size (8 KB).
+const int MAX_BODY = 1024 * 1024;         // Max body size (1 MB).
+const int RECV_TIMEOUT_MS = 5000;         // A slow client waits at most 5 s.
+const int SESSION_MINUTES = 60;           // Minutes a login session lasts without activity.
+const int CLEANUP_SECONDS = 60;           // Seconds between runs of the session cleanup thread.
+const int MAX_CART_QTY = 10;              // Max quantity of one product in the cart.
+const int PW_MIN_LEN = 8;                 // Minimum password length (characters).
+const int PW_MAX_LEN = 64;                // Maximum password length (characters).
+const int MAX_ADDRESSES = 10;            // Max active shipping addresses per user.
+const int CHECKOUT_RETRIES = 3;           // Tries for a transaction on deadlock (1213) or lock wait timeout (1205).
 const int DB_CONNECT_TRIES = 5;           // how many times to try connecting to MySQL at startup (a sleeping cloud DB needs time to wake up)
 const int DB_CONNECT_WAIT_SECONDS = 5;    // wait after the first failure; each later wait adds this much again (5, 10, 15, 20 s)
 
-// auto shipment tracking: delivery thread order ko PLACED -> PACKED -> SHIPPED -> OUT_FOR_DELIVERY -> DELIVERED le jata hai
-const int AUTO_DELIVERY = 1;              // 1 = delivery thread chalu, 0 = band (admin hi status badlega)
-const int DELIVERY_TICK_SECONDS = 5;      // delivery thread kitni der baad dekhta hai ki kaunse orders ka time ho gaya
-// har step ka delay (seconds): pichhle status ke itni der baad order is status me aata hai. Har baar min..max me random.
-// Demo ke chhote numbers; asli dukaan me ghanton/dinon me hote
+// Auto shipment tracking: the delivery thread moves an order PLACED -> PACKED -> SHIPPED -> OUT_FOR_DELIVERY -> DELIVERED.
+const int AUTO_DELIVERY = 1;              // 1 = delivery thread on, 0 = off (only the admin changes the status).
+const int DELIVERY_TICK_SECONDS = 5;      // Seconds between checks for orders that are due.
+// Delay (seconds) before an order enters each status; random between min and max.
+// Small demo numbers; a real shop would use hours or days.
 const int DELAY_PACKED_MIN = 20,           DELAY_PACKED_MAX = 40;             // PLACED -> PACKED
 const int DELAY_SHIPPED_MIN = 30,          DELAY_SHIPPED_MAX = 60;            // PACKED -> SHIPPED
 const int DELAY_OUT_FOR_DELIVERY_MIN = 40, DELAY_OUT_FOR_DELIVERY_MAX = 80;   // SHIPPED -> OUT_FOR_DELIVERY
 const int DELAY_DELIVERED_MIN = 20,        DELAY_DELIVERED_MAX = 40;          // OUT_FOR_DELIVERY -> DELIVERED
 
-// folders (server isi folder se chalta hai jisme db.conf hai; teeno yahin se relative hain)
-const string STATIC_DIR = "public";       // css / svg / png / js: startup par memory me load, /static/<file> se milti hain
-const string TEMPLATE_DIR = "templates";  // *.html templates: startup par memory me load
+// Folders, relative to where the server runs (the folder with db.conf).
+const string STATIC_DIR = "public";       // css/svg/png/js/jpg: loaded into memory at startup, served at /static/<file>.
+const string TEMPLATE_DIR = "templates";  // *.html templates: loaded into memory at startup.
 
-// storefront
-const int BUDGET_MAX = 1000;              // "Under ₹1,000" link aur home page ke "Budget picks" ki upar ki seema (rupaye)
-const int LOW_STOCK = 5;                  // itna ya kam stock bache to card par narangi "Only N left"
+// Storefront.
+const int BUDGET_MAX = 1000;              // Limit (rupees) for the "Under 1,000" link and the home page budget picks.
+const int LOW_STOCK = 5;                  // At or below this stock the card shows an orange "Only N left".
 
-// logging aur metrics
-const int VERBOSE_LOG = 0;                // 0 = console par "conn taken/returned" aur har request ki line nahi (startup, error,
-                                          // CHECKOUT, CLEANUP, LOGGER lines rehti hain); 1 = sab kuch
-const int LOG_QUEUE_SIZE = 1000;          // request_logs ki memory queue: itne entries tak wait, phir naye DROP (gine jaate hain)
-const int LOG_FLUSH_SECONDS = 1;          // logger thread har itne second me batch INSERT karta hai
-const int LOG_BATCH_MAX = 200;            // ek multi-row INSERT me max rows
-const int LATENCY_WINDOW = 1000;          // avg/p95 latency pichle itne requests par
-const int RPS_SECONDS = 10;               // requests/sec pichle itne second par
+// Logging and metrics.
+const int VERBOSE_LOG = 0;                // 0 = no per-request or "conn taken/returned" console lines (startup, errors, CHECKOUT, CLEANUP, LOGGER lines stay);
+                                          // 1 = everything.
+const int LOG_QUEUE_SIZE = 1000;          // Memory queue for request_logs: entries wait here; when it is full, new ones are DROPPED (and counted).
+const int LOG_FLUSH_SECONDS = 1;          // Seconds between the logger thread's batch INSERTs.
+const int LOG_BATCH_MAX = 200;            // Max rows in one multi-row INSERT.
+const int LATENCY_WINDOW = 1000;          // Average and p95 latency are taken over this many recent requests.
+const int RPS_SECONDS = 10;               // Requests per second are taken over this many recent seconds.
 
-// Sirf testing ke settings (normal chalane par dono 0 rakho):
-const int CHECKOUT_DELAY_MS = 0;          // checkout me rows lock karne ke BAAD itne ms ruko: races dikhane ke liye
-const int TEST_FAIL_CHECKOUT = 0;         // 1 = INSERT orders ke baad jaan-boojh kar error: ROLLBACK test karne ke liye
-const int DEBUG_SQL = 0;                  // 1 = har query ka SQL aur har param (value + length) log karo. Password wali
-                                          // (login/signup) aur user_sessions wali queries ki values '***' dikhti hain
+// Testing only (keep both at 0 normally):
+const int CHECKOUT_DELAY_MS = 0;          // Milliseconds to wait AFTER locking rows in checkout, to show races.
+const int TEST_FAIL_CHECKOUT = 0;         // 1 = fail on purpose after INSERT orders, to test ROLLBACK.
+const int DEBUG_SQL = 0;                  // 1 = log every query's SQL and each parameter (value + length).
+                                          // Values of password and user_sessions queries show as '***'.
 
 // ---- structs ----
-// ek HTTP request ke parts
+// The parts of one HTTP request.
 struct Request {
     string method;                  // GET, POST ...
-    string target;                  // /products?cat=3 (jaisa aaya)
-    string path;                    // /products (query ke bina)
-    map<string, string> params;     // query ke params, decoded: cat -> 3
+    string target;                  // As received, e.g. /products?cat=3.
+    string path;                    // Without the query, e.g. /products.
+    map<string, string> params;     // Query parameters, decoded: cat -> 3.
     string version;                 // HTTP/1.1
-    map<string, string> headers;    // naam lowercase me
-    map<string, string> cookies;    // Cookie header se: session_id -> abc...
+    map<string, string> headers;    // Names in lower case.
+    map<string, string> cookies;    // From the Cookie header: session_id -> abc...
     string body;
-    map<string, string> form;       // POST form ke fields, decoded: email -> a@b.com
+    map<string, string> form;       // POST form fields, decoded: email -> a@b.com.
 
-    // is request ka user (route() ke shuru me load_user bharta hai); har request ki apni copy
-    int user_id = 0;                // 0 = login nahi hai
+    // The user of this request (route() fills it via load_user); every request has its own copy.
+    int user_id = 0;                // 0 = not logged in.
     string user_name;
-    string role;                    // "CUSTOMER" ya "ADMIN" (har request par DB se, to role badalna agli request se chalta hai)
-    string session_id;             // current session (login hai tabhi)
-    bool clear_cookie = false;      // session expire mila: is request ke reply me cookie hata do
-    bool refresh_cookie = false;    // logged-in user: reply me cookie naye Max-Age ke saath dobara bhejo
-    int cart_count = 0;             // logged-in user ke cart me total items (nav bar ke liye)
-    string client_ip;               // client ka IPv4, jaise "127.0.0.1" (/metrics sirf local ke liye)
+    string role;                    // "CUSTOMER" or "ADMIN", read from the DB on every request, so a role change applies from the next request.
+    string session_id;             // Current session (only when logged in).
+    bool clear_cookie = false;      // The session expired: remove the cookie in the reply.
+    bool refresh_cookie = false;    // Logged-in user: send the cookie again with a new Max-Age.
+    int cart_count = 0;             // Total items in the user's cart (for the nav bar).
+    string client_ip;               // Client IPv4, e.g. "127.0.0.1" (/metrics is local only).
 };
 
-// public/ ki ek file, poori memory me (type = Content-Type)
+// One file from public/, fully in memory (type = Content-Type).
 struct StaticFile {
     string type;
     string data;
 };
 
-// queue me ek client: socket, accept hone ka time (queue_wait_ms aur latency_ms yahin se naapte hain), uska IP
+// One client in the queue: socket, accept time (queue wait and latency are measured from it), IP.
 struct ClientJob {
     SOCKET sock = INVALID_SOCKET;
-    long long accept_us = 0;        // now_us() jab accept() ne return kiya
+    long long accept_us = 0;        // now_us() when accept() returned.
     string ip;
 };
 
-// handleClient ka nateeja: kis request ka kya jawab gaya (worker isse log/metrics banata hai)
+// What handle_client did: which request got which answer (the worker builds the log and metrics from it).
 struct RequestInfo {
     string method;
-    string path;                    // query ke bina
-    int status = 0;                 // 0 = koi jawab nahi gaya (client bina request bheje chala gaya)
-    int user_id = 0;                // 0 = login nahi
+    string path;                    // Without the query.
+    int status = 0;                 // 0 = nothing answered (the client left without sending a request).
+    int user_id = 0;                // 0 = not logged in.
 };
 
-// request_logs table ki ek row (memory queue me rehti hai, logger thread DB me daalta hai)
+// One row of the request_logs table (waits in a memory queue; the logger thread writes it to the DB).
 struct LogEntry {
     string method;
     string path;
     int status = 0;
-    double latency_ms = 0;          // accept -> reply bheji gayi
-    double queue_wait_ms = 0;       // accept -> worker ne uthaya
+    double latency_ms = 0;          // accept -> reply sent.
+    double queue_wait_ms = 0;       // accept -> picked up by a worker.
     int worker_id = 0;
-    int user_id = 0;                // 0 = NULL
-    long long created = 0;          // unix seconds (request ka asli time, insert ka nahi)
+    int user_id = 0;                // 0 = NULL.
+    long long created = 0;          // Unix seconds (the real request time, not the insert time).
 };
 
-// /metrics ka snapshot (threads.cpp ka metrics_snapshot bharta hai)
+// Snapshot for /metrics (filled by metrics_snapshot in threads.cpp).
 struct Metrics {
     long long uptime_s = 0;
-    long long total = 0;            // jawab diye gaye requests (503 reject bhi)
+    long long total = 0;            // Answered requests (including 503 rejects).
     long long c2xx = 0, c3xx = 0, c4xx = 0, c5xx = 0;
-    long long rejected_503 = 0;     // queue full hone par
+    long long rejected_503 = 0;     // Queue was full.
     long long timeouts_408 = 0;
-    int busy_workers = 0;           // abhi request handle kar rahe workers
-    int queue_length = 0;           // queue me abhi kitne wait kar rahe
-    int free_db_conns = 0;          // pool me abhi kitni connections khali
-    int latency_samples = 0;        // avg/p95 kitne requests par nikale
+    int busy_workers = 0;           // Workers handling a request now.
+    int queue_length = 0;           // Clients waiting in the queue now.
+    int free_db_conns = 0;          // Free pool connections now.
+    int latency_samples = 0;        // Requests used for avg/p95.
     double avg_ms = 0;
     double p95_ms = 0;
-    double rps = 0;                 // requests/sec pichle RPS_SECONDS me
+    double rps = 0;                 // Requests per second over the last RPS_SECONDS.
     long long checkout_commit = 0;
     long long checkout_rollback = 0;
-    long long dropped_logs = 0;     // memory queue full ya DB insert fail hone se gire log entries
+    long long dropped_logs = 0;     // Log entries lost (memory queue full or DB insert failed).
 };
 
-// checkout ka nateeja (db.cpp ka do_checkout bharta hai)
+// Result of checkout (filled by do_checkout in db.cpp).
 struct CheckoutResult {
-    int status = 500;               // 200 = order ban gaya, 409 = cart khali / stock kam (message dekho),
-                                    // 503 = deadlock/timeout baar baar, 500 = koi aur error
-    int order_id = 0;               // status 200 par
-    string total;                   // status 200 par, jaise "4497.00"
-    string message = "Database error";   // user ko dikhane layak (galti hone par)
-                                    // (status 404 = chuna hua address nahi mila / kisi aur ka / delete ho chuka)
+    int status = 500;               // 200 = order created, 409 = empty cart / low stock (see message),
+                                    // 503 = deadlock/timeout again and again, 500 = other error, 404 = address not found (someone else's or deleted).
+    int order_id = 0;               // Set when status is 200.
+    string total;                   // Set when status is 200, e.g. "4497.00".
+    string message = "Database error";   // Safe to show to the user (on error).
 };
 
-// ek shipping address ka form (sab text; state_id bhi text me, validation address_check karta hai)
+// A shipping address as typed (all text, even state_id); address_check validates it.
 struct Address {
-    string id;                      // "" = naya
+    string id;                      // "" = new address.
     string first_name, last_name, phone;
-    string line1, line2, landmark;  // line2, landmark optional
+    string line1, line2, landmark;  // line2 and landmark are optional.
     string city, state_id, pincode;
-    string type = "HOME";           // HOME, WORK, OTHER
+    string type = "HOME";           // HOME, WORK or OTHER.
 };
 
-// address badalne ka nateeja
+// Result of an address change.
 struct AddressResult {
-    int status = 500;               // 200 ho gaya, 400 galat input / limit (message dikhao), 404 address nahi mila (ya kisi aur ka),
-                                    // 503 deadlock/timeout, 500 koi aur error
+    int status = 500;               // 200 done, 400 bad input or limit (show the message), 404 not found (or someone else's),
+                                    // 503 deadlock/timeout, 500 other error.
     string message = "Database error";
-    int address_id = 0;             // 200 par: naya / badla hua address
+    int address_id = 0;             // On 200: the new or changed address.
 };
 
-// password badalne ka nateeja (db.cpp ka password_change bharta hai)
+// Result of a password change (filled by password_change in db.cpp).
 struct PasswordResult {
-    int status = 500;               // 200 badal gaya, 403 purana password galat, 404 user nahi mila, 503 deadlock/timeout, 500 koi aur error
+    int status = 500;               // 200 changed, 403 wrong old password, 404 no such user, 503 deadlock/timeout, 500 other error.
     string message = "Database error";
-    int ended = 0;                  // 200 par: kitne dusre sessions band hue
+    int ended = 0;                  // On 200: how many other sessions were ended.
 };
 
-// checkout par chuna hua payment (pages.cpp form jaanch ke bharta hai). Gateway simulated hai: asli paise nahi katte
+// Payment chosen at checkout (pages.cpp fills it after checking the form). The gateway is simulated: no real money.
 struct PaymentInfo {
-    string method = "COD";          // COD, UPI, CARD, NETBANKING
-    string detail;                  // dikhane layak: UPI ID / "VISA **** 1111" / bank ka naam. Poora card number ya CVV kabhi nahi
-    string txn_ref;                 // online payment ka transaction id (COD me "")
-    bool declined = false;          // bank ne mana kiya: checkout ROLLBACK, order nahi banta
+    string method = "COD";          // COD, UPI, CARD or NETBANKING.
+    string detail;                  // Safe to show: UPI ID, "VISA **** 1111" or bank name. Never the full card number or CVV.
+    string txn_ref;                 // Transaction id of an online payment ("" for COD).
+    bool declined = false;          // The bank refused: checkout rolls back, no order is created.
 };
 
 // ---- server.cpp ----
-bool startServer();                 // WSAStartup, socket, bind, listen
-void runServer();                   // accept loop: client accept karke queue me daalta hai
-void stopServer();                  // socket band + WSACleanup
-RequestInfo handleClient(const ClientJob& job);   // ek client: read, parse, route, send, close; kya hua wo return
-string trim(const string& s);       // aage-peeche ke space, tab, \r, \n hatao
-int load_static_files(const string& dir);                 // dir ki saari files memory me (startup par ek baar); kitni mili
-const StaticFile* find_static(const string& name);        // "style.css" -> file, galat/unknown path = nullptr (404)
-// reply bhejo; extra = extra header lines, har line "\r\n" par khatam (jaise "Retry-After: 2\r\n")
+bool start_server();                 // network init (WSAStartup on Windows), socket, bind, listen.
+void run_server();                   // Accept loop: accepts clients and puts them in the queue.
+void stop_server();                  // Close the socket, network cleanup (WSACleanup on Windows).
+RequestInfo handle_client(const ClientJob& job);   // One client: read, parse, route, send, close. Returns what happened.
+string trim(const string& s);
+int load_static_files(const string& dir);                 // Loads every file of dir into memory (once at startup); returns how many.
+const StaticFile* find_static(const string& name);        // "style.css" -> file, or nullptr (404) for a wrong or unknown path.
+// Sends a reply; extra = more header lines, each ending in \r\n (e.g. "Retry-After: 2\r\n").
 void send_response(SOCKET client, int status, const string& type, const string& body,
                    const string& extra = "");
 
 // ---- pages.cpp ----
-// password ke niyam: fail hue niyamon ke messages (khali = theek). name / email / old_pw se: password me naam ya email ka hissa
-// nahi, aur badalte waqt purane jaisa nahi (old_pw "" = signup / login: yeh niyam nahi lagta). Runs on the typed password; the database only ever gets the hash (password_hash.h)
+// Password rules: returns the messages of failed rules (empty = OK). No name or email part in it; different from old_pw when changing.
+// Runs on the typed password; the database only ever gets the hash (password_hash.h).
 vector<string> check_password(const string& pw, const string& name, const string& email, const string& old_pw);
-bool load_templates(const string& dir);                   // dir ki saari .html templates memory me (startup par); sab zaroori mili?
-// template ka naam + values: {{key}} -> HTML-escaped value, {{{key}}} -> jaisa hai waisa (sirf hamare banaye HTML ke liye)
+bool load_templates(const string& dir);                   // Loads all .html templates into memory (at startup); false if a required one is missing.
+// Template name + values: {{key}} = HTML-escaped, {{{key}}} = raw (only for HTML we built ourselves).
 string render(const string& name, const map<string, string>& values);
-string render_error_page(const string& message);          // poora error page (layout ke saath), server.cpp ke 400/408/503 ke liye
-int route(SOCKET client, Request& req);   // user load karo, path dekh kar page bhejo; status code return karta hai
-int close_expired_sessions();             // saare expired sessions band karo; kitne band hue (error par -1)
+string render_error_page(const string& message);          // Full error page (with layout), used by server.cpp for 400/408/503.
+int route(SOCKET client, Request& req);   // Loads the user, picks the page by path and sends it; returns the status code.
+int close_expired_sessions();             // Closes all expired sessions; returns how many (-1 on error).
 
 // ---- threads.cpp ----
-long long now_us();                 // monotonic clock, microseconds (accept time / latency naapne ke liye)
-bool push_client(const ClientJob& job);   // queue me daalo; queue full ho to turant false (wait nahi)
-ClientJob pop_client();             // queue se nikalo (queue khali ho to ruko)
-void start_workers();               // WORKERS threads shuru karo
-void stop_workers();                // workers ko band karo aur join karo
-void start_logger();                // request_logs ke liye background thread (har LOG_FLUSH_SECONDS me batch INSERT)
-void stop_logger();                 // bacha hua sab DB me daalo (flush), phir thread band
-void push_request_log(const LogEntry& e);   // memory queue me daalo; kabhi block nahi, full ho to drop + gino
-long long metric_rejected();        // queue full 503: total aur 5xx me jodo, 503 count return
-void metric_checkout(bool commit);  // checkout COMMIT / ROLLBACK ginti
-Metrics metrics_snapshot();         // abhi ke saare numbers (thread-safe)
-void log_verbose(const string& tag, const string& msg);   // sirf VERBOSE_LOG = 1 par chhapta hai
-void log_msg_verbose(const string& msg);                  // log_msg, par sirf VERBOSE_LOG = 1 par
-void start_cleanup();               // background thread: har CLEANUP_SECONDS me expired sessions band (delivery thread bhi isi ke saath)
-void stop_cleanup();                // us thread ko turant jagao, band karo, join karo
-void start_delivery();              // delivery thread: har DELIVERY_TICK_SECONDS me jin orders ka time ho gaya unhe ek step aage (AUTO_DELIVERY = 1 par)
-void stop_delivery();               // us thread ko turant jagao, band karo, join karo
-void log_msg(const string& msg);    // [time][THREAD n] msg, thread-safe
-void log_tag(const string& tag, const string& msg);   // [time][tag] msg (jaise tag = "DB")
-int thread_id();                    // is thread ka number (0 = main thread, -1 = cleanup, -2 = logger thread, -3 = delivery)
-string thread_name();               // "THREAD n", "CLEANUP", "LOGGER", "DELIVERY" ya "SERVER" (logs ke liye)
+long long now_us();                 // Monotonic clock in microseconds (accept time and latency).
+bool push_client(const ClientJob& job);   // Puts a client in the queue; returns false at once if the queue is full (no waiting).
+ClientJob pop_client();             // Takes a client from the queue; waits while it is empty.
+void start_workers();               // Starts the WORKERS worker threads.
+void stop_workers();                // Stops the workers and joins them.
+void start_logger();                // Background thread for request_logs (batch INSERT every LOG_FLUSH_SECONDS).
+void stop_logger();                 // Writes whatever is left to the DB, then stops the thread.
+void push_request_log(const LogEntry& e);   // Adds to the memory queue; never blocks; if full it drops the entry and counts it.
+long long metric_rejected();        // Queue full (503): counts in total and 5xx, returns the 503 count.
+void metric_checkout(bool commit);  // Counts a checkout COMMIT or ROLLBACK.
+Metrics metrics_snapshot();         // All current numbers (thread-safe).
+void log_verbose(const string& tag, const string& msg);   // Prints only when VERBOSE_LOG = 1.
+void log_msg_verbose(const string& msg);                  // log_msg, but only when VERBOSE_LOG = 1.
+void start_cleanup();               // Background thread: closes expired sessions every CLEANUP_SECONDS (the delivery thread starts with it).
+void stop_cleanup();                // Wakes the thread at once, stops it and joins it.
+void start_delivery();              // Delivery thread: every DELIVERY_TICK_SECONDS moves due orders one step (when AUTO_DELIVERY = 1).
+void stop_delivery();               // Wakes the thread at once, stops it and joins it.
+void log_msg(const string& msg);    // Prints [time][THREAD n] msg, thread-safe.
+void log_tag(const string& tag, const string& msg);   // Prints [time][tag] msg (e.g. tag = "DB").
+int thread_id();                    // This thread's number (0 main, -1 cleanup, -2 logger, -3 delivery).
+string thread_name();               // "THREAD n", "CLEANUP", "LOGGER", "DELIVERY" or "SERVER" (for logs).
 
 // ---- db.cpp ----
-bool init_db();                     // db.conf padho, DB_POOL connections kholo; fail ho to false
-void close_db();                    // saare connections band
-MYSQL* get_conn(int& id);           // free connection lo (na ho to ruko); id = connection number
-void put_conn(int id);              // connection wapas pool me
-// prepared statements: sql me ? lagao, user ka data args me do (sql ke saath kabhi jodna nahi)
-// db_select: sirf SELECT. rows me har row ki values text me aati hain (NULL = ""). false = error.
-// conn_id (optional): kaun sa pool connection use hua (sirf testing pages ke liye)
+bool init_db();                     // Reads db.conf and opens DB_POOL connections; false on failure.
+void close_db();                    // Closes all connections.
+MYSQL* get_conn(int& id);           // Takes a free connection (waits if none); id = its number.
+void put_conn(int id);              // Gives the connection back to the pool.
+// Prepared statements: put ? in the SQL and pass user data in args (never join it into the SQL).
+// db_select: SELECT only; values come back as text (NULL = ""); false = error. conn_id (optional): which connection was used (testing only).
 bool db_select(const string& sql, const vector<string>& args, vector<vector<string>>& rows,
                int* conn_id = nullptr);
-// db_exec: sirf INSERT/UPDATE/DELETE. WHERE se match hui rows ki ginti return karta hai (value same rahi
-// tab bhi gini jaati hai: CLIENT_FOUND_ROWS), error par -1.
-// err_code (optional): error par MySQL error number (jaise 1062 = duplicate entry)
+// db_exec: INSERT/UPDATE/DELETE only. Returns the rows matched by WHERE (even if the value did not change: CLIENT_FOUND_ROWS), -1 on error.
+// err_code (optional): MySQL error number on failure (e.g. 1062 = duplicate entry).
 int db_exec(const string& sql, const vector<string>& args, int* err_code = nullptr);
-// bina user input wali query: pehli row ki pehli value
+// A query without user input: the first value of the first row.
 bool db_scalar(const string& sql, string& out, int* conn_id = nullptr);
-// *_on: pehle se li hui connection par (caller get_conn/put_conn karta hai). Ek request ki saari queries
-// ek hi connection par chalane ke liye. Baaki sab db_select/db_exec jaisa
+// *_on: use a connection the caller already holds (the caller does get_conn/put_conn), so all queries of one request
+// run on one connection. Otherwise like db_select/db_exec.
 bool db_select_on(MYSQL* m, const string& sql, const vector<string>& args, vector<vector<string>>& rows,
-                  int* err_code = nullptr);   // err_code: error par MySQL error number (jaise 1213 deadlock)
+                  int* err_code = nullptr);   // err_code: MySQL error number on failure (e.g. 1213 deadlock).
 int db_exec_on(MYSQL* m, const string& sql, const vector<string>& args, int* err_code = nullptr);
-// cart (sab diya hua connection m use karte hain; cart_id hamesha session ke user se aata hai)
-int find_active_cart(MYSQL* m, int user_id);        // ACTIVE cart ka id, nahi mila/error: 0 (kuch banata nahi)
-int get_active_cart(MYSQL* m, int user_id);         // ACTIVE cart, na ho to banata hai (race me 1062 sambhalta hai); error: 0
-bool cart_add(MYSQL* m, int cart_id, const string& product_id, const string& qty);   // atomic add, MAX_CART_QTY cap
-int cart_set_qty(MYSQL* m, int cart_id, const string& product_id, const string& qty); // qty "0" = hata do; match rows, error -1
-int cart_remove(MYSQL* m, int cart_id, const string& product_id);                     // hati rows, error -1
-bool cart_items(MYSQL* m, int cart_id, vector<vector<string>>& rows);   // product_id, name, price, qty, stock
-int cart_count(MYSQL* m, int user_id);              // cart ke total items, error -1
-// checkout: ek pooled connection par ek DB transaction (retry deadlock par). Cart session ke user ka hota hai.
-// address_id: user ka chuna hua shipping address; transaction ke andar check hota hai ki usi user ka aur active hai (nahi to 404)
-// pay: COD (default) ya online; online PAID usi transaction me hota hai, declined ho to poora ROLLBACK
+// Cart (all use the given connection m; cart_id always comes from the session user).
+int find_active_cart(MYSQL* m, int user_id);        // ACTIVE cart id; 0 if none or error (creates nothing).
+int get_active_cart(MYSQL* m, int user_id);         // ACTIVE cart, created if missing (handles a 1062 race); 0 on error.
+bool cart_add(MYSQL* m, int cart_id, const string& product_id, const string& qty);   // Atomic add, capped at MAX_CART_QTY.
+int cart_set_qty(MYSQL* m, int cart_id, const string& product_id, const string& qty); // qty "0" removes; returns rows matched, -1 on error.
+int cart_remove(MYSQL* m, int cart_id, const string& product_id);                     // Rows removed, -1 on error.
+bool cart_items(MYSQL* m, int cart_id, vector<vector<string>>& rows);   // product_id, name, price, qty, stock.
+int cart_count(MYSQL* m, int user_id);              // Total items in the cart, -1 on error.
+// Checkout: one DB transaction on one pooled connection (retried on deadlock); the cart is the session user's.
+// address_id is checked inside the transaction (same user, active, else 404). pay: online = PAID in the same transaction; a decline rolls back.
 CheckoutResult do_checkout(int user_id, int address_id, const PaymentInfo& pay = PaymentInfo());
-// shipping addresses (sab session ke user_id se; kisi aur ka address kabhi nahi milta)
-string address_check(Address& a);   // trim karke jaanch: "" = theek, warna user ko dikhane layak message
-AddressResult address_save(int user_id, const Address& a, bool is_new);   // naya (max MAX_ADDRESSES) ya edit; ek transaction
-AddressResult address_delete(int user_id, int address_id);                // is_active = 0 (DELETE kabhi nahi)
-AddressResult address_set_default(int user_id, int address_id);           // purana default hatao + naya lagao: ek transaction
+// Shipping addresses (always by the session's user_id; someone else's address is never found).
+string address_check(Address& a);   // Trims and checks: "" = OK, otherwise a message for the user.
+AddressResult address_save(int user_id, const Address& a, bool is_new);   // New (max MAX_ADDRESSES) or edit; one transaction.
+AddressResult address_delete(int user_id, int address_id);                // Sets is_active = 0 (never a DELETE).
+AddressResult address_set_default(int user_id, int address_id);           // Clears the old default and sets the new one: one transaction.
 
-// Order ka status badalna (admin: ship / deliver / cancel; customer: sirf apna PLACED order cancel). Ek DB transaction.
+// Order status change (admin: ship/deliver/cancel; customer: cancel own PLACED/PACKED order). One DB transaction.
 struct OrderResult {
-    int status = 500;               // 200 ho gaya, 400 raasta allowed nahi, 404 order nahi mila (ya kisi aur ka),
-                                    // 409 order beech me kisi aur ne badal diya, 503 deadlock/timeout baar baar, 500 koi aur error
+    int status = 500;               // 200 done, 400 path not allowed, 404 order not found (or someone else's),
+                                    // 409 someone changed it meanwhile, 503 deadlock/timeout again and again, 500 other error.
     string message = "Database error";
-    string from;                    // order ka purana status (log ke liye)
+    string from;                    // The old status (for logs).
 };
-// expected_from: jo status page par dikha tha ("" = check nahi). as_admin = false: sirf user_id ka PLACED ya PACKED order, sirf CANCELLED
+// expected_from: the status the page showed ("" = no check). as_admin = false: only the user's own PLACED or PACKED order, only to CANCELLED.
 OrderResult order_change(int order_id, const string& to, int user_id, bool as_admin, const string& expected_from);
-// order_change jaisa, par history me "changed_by" bhi likhta hai: "SYSTEM" (delivery thread, user_id 0, as_admin true), "ADMIN", "CUSTOMER"
+// Like order_change, but also writes "changed_by" in the history: "SYSTEM" (delivery thread, user_id 0, as_admin true), "ADMIN", "CUSTOMER".
 OrderResult order_change_by(int order_id, const string& to, int user_id, bool as_admin, const string& expected_from,
                             const string& changed_by);
-// ek step aage ya CANCELLED: PLACED->PACKED->SHIPPED->OUT_FOR_DELIVERY->DELIVERED, aur DELIVERED se pehle kabhi bhi CANCELLED
+// One step forward, or CANCELLED any time before DELIVERED: PLACED->PACKED->SHIPPED->OUT_FOR_DELIVERY->DELIVERED.
 bool order_transition_ok(const string& from, const string& to);
-string order_next_status(const string& status);                   // agla step ("" = DELIVERED/CANCELLED/unknown: aage kuch nahi)
-int order_eta_seconds(const string& status);                      // next_step_at ke BAAD ke baaki steps ka average time (seconds)
-int deliver_due_orders();           // jin orders ka next_step_at aa gaya unhe ek step aage (max 50). Kitne badle, error par -1
+string order_next_status(const string& status);                   // Next step ("" = nothing after DELIVERED, CANCELLED or an unknown status).
+int order_eta_seconds(const string& status);                      // Average time (seconds) of the steps AFTER the next one (for "Arriving by").
+int deliver_due_orders();           // Moves orders whose next_step_at has come one step (max 50). Returns how many moved, -1 on error.
 
-// User ka role badalna (admin panel). Ek DB transaction: apna role nahi, aakhri ADMIN kabhi demote nahi.
+// Role change (admin panel), one DB transaction: no changing your own role, the last ADMIN is never demoted.
 struct RoleResult {
-    int status = 500;               // 200 ho gaya, 400 niyam ke khilaf, 403 ab admin nahi raha, 404 user nahi, 503 busy, 500 error
-    string code = "db_error";       // 400/403/404 par admin flash ka code: own_role, last_admin, same_role, no_user, not_admin, bad_request
-    string from;                    // purana role (log ke liye)
+    int status = 500;               // 200 done, 400 against the rules, 403 no longer an admin, 404 no such user, 503 busy, 500 error.
+    string code = "db_error";       // Flash code on 400/403/404: own_role, last_admin, same_role, no_user, not_admin, bad_request.
+    string from;                    // The old role (for logs).
 };
+
 RoleResult role_change(int admin_id, int user_id, const string& new_role);
-// Change a password. current_stored = the value now in the database (pages.cpp read it and verified the typed password),
+// Change a password. current_stored = the value now in the database (auth.cpp read it and verified the typed password),
 // new_hash = the new hash. The update only happens if the stored value is still the same. In the same transaction every
 // other session of this user except keep_session is ended (end_reason 'LOGOUT').
 PasswordResult password_change(int user_id, const string& current_stored, const string& new_hash, const string& keep_session);
-// admin ke har badlav ki ek row admin_actions me (transaction ke bahar wale badlavon ke liye)
+// One row in admin_actions per admin change (for changes outside a transaction).
 void admin_audit(int admin_id, const string& action, const string& details);
-// request_logs me ek saath kai rows (ek multi-row INSERT). Kitni judi wo return, error par -1
+// Many request_logs rows in one multi-row INSERT. Returns rows added, -1 on error.
 int db_insert_request_logs(const vector<LogEntry>& rows);
-int db_free_connections();          // pool me abhi kitni connections khali (/metrics ke liye)
-void db_thread_start();             // worker thread shuru hote hi (mysql_thread_init)
-void db_thread_end();               // worker thread band hone se pehle (mysql_thread_end)
+int db_free_connections();          // Free pool connections (for /metrics).
+void db_thread_start();             // Call when a worker thread starts (mysql_thread_init).
+void db_thread_end();               // Call before a worker thread ends (mysql_thread_end).

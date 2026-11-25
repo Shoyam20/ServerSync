@@ -1,5 +1,5 @@
 # Builds server.exe with build.bat and runs the offline tests (tests/run_all.py) on a Windows machine,
-# the same way we run them on our own PCs. Every test makes its own throwaway MySQL, so no secrets are needed.
+# the same way we run them on our own PCs. No database or secrets are needed.
 name: windows tests
 
 on:

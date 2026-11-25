@@ -74,7 +74,7 @@ docker build -t serversync .
 docker run -p 8080:8080 -e DB_HOST=... -e DB_PORT=... -e DB_USER=... -e DB_PASSWORD=... serversync
 ```
 
-The Docker image turns the debug routes (`/test`, `/slow`, `/dbtest`, `/dbslow`) off with `DISABLE_TEST_ROUTES=1`.
+The debug routes (`/test`, `/slow`, `/dbtest`, `/dbslow`) only exist when `DEBUG_ROUTES=1` is set, so they are off on Render.
 Deploying to Render + Aiven step by step is in [DEPLOY.md](DEPLOY.md).
 
 ## Project structure
@@ -84,7 +84,13 @@ src/
   main.cpp        start-up and shut-down order (templates -> DB pool -> socket -> threads)
   server.cpp      sockets: accept loop, reading requests, sending responses, static files under /static/
   threads.cpp     client queue, worker threads, request logger, session cleanup, delivery thread, metrics
-  pages.cpp       routing, sessions, signup / login, every page, template rendering
+  pages.cpp       routing, sessions, template rendering, shared page helpers, debug routes, /healthz
+  pages.h         declarations shared by the page files below
+  auth.cpp        signup, login, logout, change password (password hashing), sessions page
+  shop.cpp        home, product list, product page
+  cart.cpp        cart: show, add, update, remove
+  checkout.cpp    shipping addresses, payment, checkout, customer orders
+  admin.cpp       /metrics and the admin panel
   db.cpp          MySQL connection pool, query helpers, checkout / order / password transactions
 include/
   common.h        settings (ports, pool sizes, limits) and shared structs / declarations
@@ -93,7 +99,7 @@ include/
 templates/        HTML templates (loaded into memory at start-up)
 public/           CSS, JavaScript, favicon and product photos
 sql/              ecommerce_db.sql (full schema + seed data) and the old migrations
-tests/            offline tests (throwaway MySQL, fake database) and tests against a running server
+tests/            offline tests (password hashing) and run_all.py
 .github/workflows CI: Linux Docker build and Windows build + tests
 ```
 
@@ -102,17 +108,13 @@ Most settings (worker count, queue size, DB pool size, session length, delivery 
 
 ## Tests
 
-Most tests need no server and never touch your real database: they start their own throwaway MySQL on port 3399
-(`tests/throwaway_mysql.py`), or compile the real `pages.cpp` with a fake database (`tests/pages_render_check.cpp`).
+The old test suite was written for the single `pages.cpp` and was removed when the pages were split into
+`auth.cpp`, `shop.cpp`, `cart.cpp`, `checkout.cpp` and `admin.cpp`. What is left needs no server and no database:
 
 ```
-python tests\run_all.py                 all offline tests, with a pass / fail summary
-python tests\run_all.py password        only the files whose name contains "password"
-python tests\test_password_hash.py      one file
+python tests\run_all.py                 every test_*.py, with a pass / fail summary
+python tests\test_password_hash.py      PBKDF2 known answers, hash / verify, old plain text passwords
 ```
-
-`run_all.py` skips the tests that need a running server (`test_auth`, `test_cart`, `test_checkout_http`,
-`test_live_flow`, `test_metrics_http`, `test_static_http`); start `server.exe` yourself and run those directly.
 
 GitHub Actions runs two workflows on every push: **linux build** (the Render Dockerfile) and **windows tests**
 (`build.bat` + `run_all.py` with MySQL 8.0 on a Windows runner).

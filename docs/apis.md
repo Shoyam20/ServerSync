@@ -50,5 +50,5 @@ SQL features we rely on: `START TRANSACTION`, `SELECT ... FOR UPDATE` / `FOR SHA
 | `time`, `strftime`, `localtime_s` / `localtime_r` | log timestamps |
 | `SetConsoleCtrlHandler` (Windows), `sigaction` / `signal` with `SIGINT`, `SIGTERM` (Linux) | clean shut-down on Ctrl+C or when Docker stops the container |
 | `signal(SIGPIPE, SIG_IGN)` (Linux) | writing to a client that already disconnected must not kill the process |
-| `std::getenv` | `PORT`, `DB_*`, `DISABLE_TEST_ROUTES` |
+| `std::getenv` | `PORT`, `DB_*`, `DEBUG_ROUTES` |
 | `std::filesystem`, `std::ifstream` / `std::ofstream` | loading templates and static files, reading `db.conf` |

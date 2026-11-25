@@ -22,9 +22,6 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends libmysqlclient21 libssl3t64 ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 ENV TZ=Asia/Kolkata
-# The public deploy does not serve the debug routes (/test, /slow, /dbtest, /dbslow); they return 404.
-# Remove this line (or set it to 0 in Render's environment) to turn them back on for a load test.
-ENV DISABLE_TEST_ROUTES=1
 WORKDIR /app
 COPY --from=build /src/server ./server
 COPY public public

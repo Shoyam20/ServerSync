@@ -53,9 +53,9 @@ Build with `build.bat`, run `server.exe`, open http://localhost:8080. If this wo
 - **Time zone:** the container uses `TZ=Asia/Kolkata`; Aiven MySQL runs in UTC, so times produced by SQL (`NOW()`)
   may show in UTC. Check Aiven's advanced configuration for a default time zone setting if this matters.
 - **/metrics** stays blocked on Render (requests come through Render's proxy, not from 127.0.0.1). That is intended.
-- **Testing routes:** `/test`, `/slow`, `/dbtest` and `/dbslow` return 404 on Render, because the Dockerfile sets
-  `DISABLE_TEST_ROUTES=1` (`/dbslow` holds one of the 4 pool connections for 2 s). For a load test, add the environment
-  variable `DISABLE_TEST_ROUTES=0` in Render and redeploy; remove it again afterwards.
+- **Testing routes:** `/test`, `/slow`, `/dbtest` and `/dbslow` only exist when the environment variable
+  `DEBUG_ROUTES=1` is set (`/dbslow` holds one of the 4 pool connections for 2 s). On Render they are off; for a load test
+  add `DEBUG_ROUTES=1` in Render and redeploy, and remove it again afterwards.
 - **Health check:** `/healthz` answers `ok` without touching the database. In Render: Settings -> Health Check Path ->
   `/healthz`. Render then only switches traffic to a new deploy once it answers.
 - **Database asleep:** Aiven's free plan powers the service off when it is idle; its hostname then stops resolving.
