@@ -34,8 +34,10 @@ browser ──TCP──> accept loop (main thread)
 ```
 
 The main thread only accepts; it never reads a request. This is the producer / consumer pattern: the accept loop
-produces jobs, the workers consume them, and a mutex + condition variable protect the queue. Because the queue has a fixed
-size, a flood of clients gets quick 503 answers instead of using up memory.
+produces jobs, the workers consume them. The queue is a bounded buffer: a circular array guarded by a mutex, plus two
+counting semaphores, `slots` (free places) and `items` (waiting clients). Workers sleep on `items`; the accept loop calls
+`slots.try_acquire()`, so when the queue is full it never waits and answers 503 at once instead of using up memory.
+(The condition variable in threads.cpp belongs to the request logger, not to this queue.)
 
 ## Database connection pool (`src/db.cpp`)
 
