@@ -7,6 +7,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# a newer push to the same branch cancels the older run that is still going
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   docker:
     runs-on: ubuntu-latest
