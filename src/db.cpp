@@ -156,14 +156,39 @@ bool init_db() {
         return false;
     }
 
-    for (int i = 0; i < DB_POOL; i++) {
-        MYSQL* m = open_conn();
-        if (m == nullptr) {
-            close_db();
-            return false;
+    // Cloud DB (Aiven free plan) so raha ho ya abhi start ho raha ho to pehla connect fail hota hai. Turant band hone ke bajaye
+    // kuch baar ruk kar dobara koshish: har baar thoda zyada wait (5 s, 10 s, 15 s ...). Pool aadha bana ho to pehle wo band karo
+    bool ready = false;
+    for (int attempt = 1; attempt <= DB_CONNECT_TRIES && !ready; attempt++) {
+        ready = true;
+        for (int i = 0; i < DB_POOL; i++) {
+            MYSQL* m = open_conn();
+            if (m == nullptr) {
+                ready = false;
+                break;
+            }
+            pool[i] = m;
+            free_ids[free_count++] = i + 1;
         }
-        pool[i] = m;
-        free_ids[free_count++] = i + 1;
+        if (ready) break;
+        for (int i = 0; i < DB_POOL; i++) {
+            if (pool[i] != nullptr) {
+                mysql_close(pool[i]);
+                pool[i] = nullptr;
+            }
+        }
+        free_count = 0;
+        if (attempt < DB_CONNECT_TRIES) {
+            int wait = DB_CONNECT_WAIT_SECONDS * attempt;
+            log_tag("DB", "connect attempt " + to_string(attempt) + " of " + to_string(DB_CONNECT_TRIES) + " failed, trying again in " +
+                          to_string(wait) + " s");
+            this_thread::sleep_for(chrono::seconds(wait));
+        }
+    }
+    if (!ready) {
+        log_tag("DB", "gave up after " + to_string(DB_CONNECT_TRIES) + " attempts");
+        mysql_library_end();
+        return false;
     }
 
     free_sem.release(DB_POOL);      // ab saare connections lene ke liye taiyaar hain

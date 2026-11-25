@@ -24,6 +24,8 @@ const int PW_MIN_LEN = 8;                 // password ki min lambai (characters)
 const int PW_MAX_LEN = 64;                // password ki max lambai (characters)
 const int MAX_ADDRESSES = 10;            // ek user ke max active shipping addresses
 const int CHECKOUT_RETRIES = 3;           // deadlock (1213) / lock wait timeout (1205) par transaction kitni baar try karna
+const int DB_CONNECT_TRIES = 5;           // startup par MySQL se connect kitni baar try karna (cloud DB jaagne me time leta hai)
+const int DB_CONNECT_WAIT_SECONDS = 5;    // pehli fail ke baad itna wait, phir har baar isse ek guna aur (5, 10, 15, 20 s)
 
 // auto shipment tracking: delivery thread order ko PLACED -> PACKED -> SHIPPED -> OUT_FOR_DELIVERY -> DELIVERED le jata hai
 const int AUTO_DELIVERY = 1;              // 1 = delivery thread chalu, 0 = band (admin hi status badlega)
