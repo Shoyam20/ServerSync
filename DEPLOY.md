@@ -55,5 +55,6 @@ Build with `build.bat`, run `server.exe`, open http://localhost:8080. If this wo
 - **/metrics** stays blocked on Render (requests come through Render's proxy, not from 127.0.0.1). That is intended.
 - **Testing routes:** `/slow`, `/dbslow` and `/dbtest` are public. `/dbslow` holds a DB connection for 2 s and the
   pool has 4, so a few repeated hits can stall the shop. Consider disabling them before sharing the URL.
-- **Passwords are stored in plain text** (see `common.h`). Do not let real users reuse real passwords on this site
-  until passwords are hashed.
+- **Passwords are hashed** (PBKDF2-SHA256, `include/password_hash.h`). Accounts created before this change still have
+  their typed password in the database until that user logs in once; the server then replaces it with a hash.
+  To see how many are left: `SELECT COUNT(*) FROM users WHERE password NOT LIKE 'pbkdf2_sha256$%';`
