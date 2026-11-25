@@ -801,7 +801,8 @@ static string change_pw_form(const Request& req, const string& email, const vect
     return render("change_password", v);
 }
 
-// GET /account/password = form, POST = badlo. Login zaroori. Purana password sahi hona chahiye (db.cpp ka password_change dekhta hai)
+// GET /account/password = form, POST = badlo. Login zaroori. Purana password yahin verify hota hai, naya hash ban kar db.cpp ke
+// password_change ko jaata hai (wahi transaction me save + baaki sessions band)
 static int account_password_page(SOCKET client, const Request& req) {
     if (req.user_id == 0) return redirect(client, req, "/login");
     if (req.method != "GET" && req.method != "POST") return method_not_allowed(client, req, "GET, POST");
@@ -831,7 +832,22 @@ static int account_password_page(SOCKET client, const Request& req) {
     if (!errs.empty())
         return send_page(client, req, 400, "Change password", change_pw_form(req, email, failed.empty() ? nullptr : &failed), "", errors_flash(errs, true));
 
-    PasswordResult r = password_change(req.user_id, cur, pw, req.session_id);
+    // purana password sahi hai? saved hash se milao (purane plain text users bhi chalte hain, verify_password dekho)
+    const string wrong_cur = "Current password is incorrect.";
+    rows.clear();
+    if (!db_select("SELECT password FROM users WHERE user_id = ?", {to_string(req.user_id)}, rows) || !cols_ok(rows, 1))
+        return error_page(client, req, 500, "Database error");
+    if (rows.empty() || !verify_password(cur, rows[0][0]))
+        return send_page(client, req, 403, "Change password", change_pw_form(req, email), "", flash_text("err", wrong_cur));
+    const string hashed = hash_password(pw);
+    if (hashed.empty()) {
+        log_tag("PAGE", "password change: hashing failed for user " + to_string(req.user_id));
+        return error_page(client, req, 500, "Could not change password");
+    }
+
+    // password_change ko wahi saved value dete hain jo abhi padhi: wo "UPDATE ... WHERE BINARY password = <saved>" karta hai, to
+    // agar beech me kisi aur ne password badal diya to 0 rows -> 403, kuch nahi badalta (pehle jaisa hi atomic check)
+    PasswordResult r = password_change(req.user_id, rows[0][0], hashed, req.session_id);
     if (r.status == 200) {
         log_tag("PAGE", "user " + to_string(req.user_id) + " changed the password, " + to_string(r.ended) + " other sessions ended");
         return redirect(client, req, "/account/password?ok=1");
