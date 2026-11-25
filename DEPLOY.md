@@ -53,8 +53,14 @@ Build with `build.bat`, run `server.exe`, open http://localhost:8080. If this wo
 - **Time zone:** the container uses `TZ=Asia/Kolkata`; Aiven MySQL runs in UTC, so times produced by SQL (`NOW()`)
   may show in UTC. Check Aiven's advanced configuration for a default time zone setting if this matters.
 - **/metrics** stays blocked on Render (requests come through Render's proxy, not from 127.0.0.1). That is intended.
-- **Testing routes:** `/slow`, `/dbslow` and `/dbtest` are public. `/dbslow` holds a DB connection for 2 s and the
-  pool has 4, so a few repeated hits can stall the shop. Consider disabling them before sharing the URL.
+- **Testing routes:** `/test`, `/slow`, `/dbtest` and `/dbslow` return 404 on Render, because the Dockerfile sets
+  `DISABLE_TEST_ROUTES=1` (`/dbslow` holds one of the 4 pool connections for 2 s). For a load test, add the environment
+  variable `DISABLE_TEST_ROUTES=0` in Render and redeploy; remove it again afterwards.
+- **Health check:** `/healthz` answers `ok` without touching the database. In Render: Settings -> Health Check Path ->
+  `/healthz`. Render then only switches traffic to a new deploy once it answers.
+- **Database asleep:** Aiven's free plan powers the service off when it is idle; its hostname then stops resolving.
+  At start-up the server tries to connect 5 times (waiting 5, 10, 15 and 20 s) before it gives up, so a database that is
+  just waking up is fine. If it is powered off, power it on in the Aiven console first, then redeploy.
 - **Passwords are hashed** (PBKDF2-SHA256, `include/password_hash.h`). Accounts created before this change still have
   their typed password in the database until that user logs in once; the server then replaces it with a hash.
   To see how many are left: `SELECT COUNT(*) FROM users WHERE password NOT LIKE 'pbkdf2_sha256$%';`
