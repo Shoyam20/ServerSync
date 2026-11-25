@@ -1,5 +1,11 @@
 // server.cpp - socket code (Winsock on Windows, POSIX sockets on Linux; the differences are in platform.h):
 // accept loop, recv/send, request parsing, static files (/static/...)
+//
+// How a request flows through this file:
+//   run_server()      main thread: accept() a client and put it in the queue (or answer 503 if the queue is full)
+//   handle_client()   a worker thread: read_request() -> serve_static() or route() -> close the socket
+//   read_request()    reads bytes until the end of the headers, parses them, then reads the body (Content-Length)
+//   send_response()   builds the status line + headers + body and sends all of it
 #include <filesystem>
 #include <fstream>
 #include <iostream>
