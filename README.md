@@ -123,7 +123,6 @@ GitHub Actions runs two workflows on every push: **linux build** (the Render Doc
 
 | Member | Module (from the original file headers) |
 |---|---|
-| Aradhana ([Aradhanajsl](https://github.com/Aradhanajsl)) | `server.cpp`: sockets, accept loop, request parsing, static files |
 | Shoyam20 | `db.cpp`, `threads.cpp`, `main.cpp`, `common.h` |
 | Ashutosh ([Ashu-Stark](https://github.com/Ashu-Stark)) | `pages.cpp`; later the Linux / Render deploy, password hashing, CI |
 | Sneha ([Sneha2515](https://github.com/Sneha2515)) | split `pages.cpp` into auth / shop / cart / checkout / admin, rewrote the comments in English |
