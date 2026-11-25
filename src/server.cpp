@@ -16,10 +16,11 @@
 #endif
 using namespace std;
 
-// Global so the Ctrl+C handler can close it.
+// The listening socket. Global so the Ctrl+C / SIGTERM handler can close it, which makes accept() fail and
+// lets run_server() leave its loop.
 static SOCKET server = INVALID_SOCKET;
 
-// Safe to call twice.
+// Closes the listening socket. Safe to call twice: the second call sees INVALID_SOCKET and does nothing.
 static void close_server_socket() {
     if (server != INVALID_SOCKET) {
         SOCKET s = server;
@@ -292,6 +293,8 @@ void send_response(SOCKET client, int status, const string& type, const string& 
 }
 
 // ---- static files: /static/<name>, loaded into memory once at startup (no disk reads) ----
+// Why memory: the files are small (CSS, JS, icons, product photos), reading them once is faster than opening a file
+// per request, and it is safer, because a request can only ask for a name that is already in the map.
 // The URL is never used as a disk path, only looked up in this map, so ../ tricks cannot work.
 static map<string, StaticFile> static_files;
 
@@ -378,7 +381,8 @@ static int serve_static(SOCKET client, const Request& req) {
     return 200;
 }
 
-// Handles one client: read, route, close. Returns what was answered (for the worker's log and metrics).
+// Handles one client: read, route, close. Runs on a worker thread, never on the main thread.
+// Returns what was answered (for the worker's log and metrics).
 // Per-request console lines only print when VERBOSE_LOG = 1.
 RequestInfo handle_client(const ClientJob& job) {
     SOCKET client = job.sock;
@@ -414,6 +418,8 @@ RequestInfo handle_client(const ClientJob& job) {
     return info;
 }
 
+// Sets up shutdown handling, loads the static files and opens the listening socket:
+// socket() -> setsockopt(SO_REUSEADDR) -> bind() -> listen(). Returns false (and logs why) if any step fails.
 bool start_server() {
 #ifdef _WIN32
     SetConsoleCtrlHandler(on_ctrl_c, TRUE);
@@ -486,6 +492,8 @@ static void reject_client(SOCKET client) {
     close_socket(client);
 }
 
+// The accept loop, on the main thread. It only accepts and queues; the worker threads do the reading and answering,
+// so one slow client cannot stop new clients from being accepted. Ends when the listening socket is closed.
 void run_server() {
     while (true) {
         // accept() sleeps until a client connects and returns a new socket for it.
@@ -516,6 +524,7 @@ void run_server() {
     }
 }
 
+// Called once at shutdown, after the worker threads have stopped.
 void stop_server() {
     close_server_socket();
     // Windows: WSACleanup, the pair of WSAStartup. Linux: nothing.
