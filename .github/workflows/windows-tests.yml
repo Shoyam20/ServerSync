@@ -45,5 +45,10 @@ jobs:
         shell: cmd
         run: build.bat
 
+      # on our PCs libmysql.dll sits next to server.exe (it is git-ignored), and some tests copy it from there
+      - name: copy libmysql.dll into the project folder
+        shell: pwsh
+        run: Copy-Item "$env:MYSQL_DIR\lib\libmysql.dll" .
+
       - name: offline tests
         run: python tests/run_all.py
