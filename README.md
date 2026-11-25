@@ -118,3 +118,15 @@ python tests\test_password_hash.py      PBKDF2 known answers, hash / verify, old
 
 GitHub Actions runs two workflows on every push: **linux build** (the Render Dockerfile) and **windows tests**
 (`build.bat` + `run_all.py` with MySQL 8.0 on a Windows runner).
+
+## Team
+
+| Member | Module (from the original file headers) |
+|---|---|
+| Aradhana ([Aradhanajsl](https://github.com/Aradhanajsl)) | `server.cpp`: sockets, accept loop, request parsing, static files |
+| Shoyam20 | `db.cpp`, `threads.cpp`, `main.cpp`, `common.h` |
+| Ashutosh ([Ashu-Stark](https://github.com/Ashu-Stark)) | `pages.cpp`; later the Linux / Render deploy, password hashing, CI |
+| Sneha ([Sneha2515](https://github.com/Sneha2515)) | split `pages.cpp` into auth / shop / cart / checkout / admin, rewrote the comments in English |
+
+The first version was uploaded in one commit from Shoyam20's account, so the commit history does not show who wrote
+which file; the `Owner:` lines at the top of each file in that commit (`ac20689`) do.
