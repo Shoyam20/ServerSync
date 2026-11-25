@@ -1,6 +1,5 @@
 // server.cpp - socket code (Winsock on Windows, POSIX sockets on Linux; the differences are in platform.h):
 // accept loop, recv/send, request parsing, static files (/static/...)
-// Owner: Aradhana
 #include <filesystem>
 #include <fstream>
 #include <iostream>
