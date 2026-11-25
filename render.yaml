@@ -7,6 +7,7 @@ services:
     plan: free
     branch: linux-deploy
     dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz   # src/pages.cpp: answers "ok" without touching the database
     envVars:
       - key: DB_HOST          # Aiven Overview -> Host
         sync: false
