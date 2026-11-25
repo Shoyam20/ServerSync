@@ -38,6 +38,7 @@ string address_check(Address&) { return ""; }
 AddressResult address_save(int, const Address&, bool) { return AddressResult(); }
 AddressResult address_delete(int, int) { return AddressResult(); }
 AddressResult address_set_default(int, int) { return AddressResult(); }
+int order_eta_seconds(const string&) { return 100; }
 string order_next_status(const string& status) {           // same steps as FLOW in db.cpp
     static const char* FLOW[] = {"PLACED", "PACKED", "SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED"};
     for (int i = 0; i < 4; i++) if (status == FLOW[i]) return FLOW[i + 1];
