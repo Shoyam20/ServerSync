@@ -114,6 +114,7 @@ The old test suite was written for the single `pages.cpp` and was removed when t
 ```
 python tests\run_all.py                 every test_*.py, with a pass / fail summary
 python tests\test_password_hash.py      PBKDF2 known answers, hash / verify, old plain text passwords
+python tests\test_server.py             server.cpp: request parsing, 413 / 431 / 501 / 408 over a socket, static GET / HEAD
 ```
 
 GitHub Actions runs two workflows on every push: **linux build** (the Render Dockerfile) and **windows tests**
