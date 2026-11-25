@@ -6,7 +6,7 @@
 FROM ubuntu:24.04 AS build
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends g++ make libmysqlclient-dev \
+ && apt-get install -y --no-install-recommends g++ make libmysqlclient-dev libssl-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Makefile ./
@@ -16,9 +16,10 @@ RUN make
 
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
-# libmysqlclient21 = MySQL 8.0 client runtime; tzdata so log times / card-expiry check use Indian time
+# libmysqlclient21 = MySQL 8.0 client runtime; libssl3t64 = OpenSSL (password hashing; mysql client needs it too);
+# tzdata so log times / card-expiry check use Indian time
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libmysqlclient21 ca-certificates tzdata \
+ && apt-get install -y --no-install-recommends libmysqlclient21 libssl3t64 ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 ENV TZ=Asia/Kolkata
 WORKDIR /app

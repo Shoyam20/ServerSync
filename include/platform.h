@@ -34,6 +34,18 @@ inline bool secure_random(unsigned char* buf, unsigned long n) {
     return BCryptGenRandom(nullptr, buf, n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
 }
 
+// PBKDF2-HMAC-SHA256 (password hashing, password_hash.h dekho). Windows ka apna bcrypt.dll: koi nayi library nahi chahiye,
+// -lbcrypt pehle se link hota hai. HMAC flag zaroori hai, warna provider plain SHA-256 deta hai jo PBKDF2 me nahi chalta
+inline bool pbkdf2_sha256(const std::string& pw, const unsigned char* salt, unsigned long salt_len, unsigned long iterations,
+                          unsigned char* out, unsigned long out_len) {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, BCRYPT_ALG_HANDLE_HMAC_FLAG) != 0) return false;
+    NTSTATUS st = BCryptDeriveKeyPBKDF2(alg, (PUCHAR)pw.data(), (ULONG)pw.size(), (PUCHAR)salt, salt_len,
+                                        (ULONGLONG)iterations, out, out_len, 0);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return st == 0;
+}
+
 inline void local_time(const time_t* now, tm* out) { localtime_s(out, now); }   // Windows: (tm*, time_t*)
 inline void sleep_ms(int ms) { Sleep((DWORD)ms); }
 
@@ -46,6 +58,7 @@ inline void sleep_ms(int ms) { Sleep((DWORD)ms); }
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <errno.h>
+#include <openssl/evp.h>  // PKCS5_PBKDF2_HMAC (password hashing)
 
 typedef int SOCKET;                         // Linux me socket bas ek file descriptor (int) hai
 const SOCKET INVALID_SOCKET = -1;
@@ -80,6 +93,14 @@ inline bool secure_random(unsigned char* buf, unsigned long n) {
         got += (unsigned long)r;
     }
     return true;
+}
+
+// PBKDF2-HMAC-SHA256: Linux par OpenSSL ka libcrypto (Makefile me -lcrypto). libmysqlclient khud OpenSSL use karta hai,
+// to server image me yeh library pehle se hoti hai
+inline bool pbkdf2_sha256(const std::string& pw, const unsigned char* salt, unsigned long salt_len, unsigned long iterations,
+                          unsigned char* out, unsigned long out_len) {
+    return PKCS5_PBKDF2_HMAC(pw.data(), (int)pw.size(), salt, (int)salt_len, (int)iterations, EVP_sha256(),
+                             (int)out_len, out) == 1;
 }
 
 inline void local_time(const time_t* now, tm* out) { localtime_r(now, out); }   // POSIX: (time_t*, tm*) - ulta order
