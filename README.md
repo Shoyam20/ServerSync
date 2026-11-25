@@ -42,3 +42,20 @@ Render with an Aiven MySQL database.
 | Database | MySQL 8.0 through the MySQL C API, prepared statements everywhere user input is used |
 | Pages | HTML templates in `templates/`, rendered on the server; plain CSS and a little JavaScript in `public/` |
 | Deploy | Docker image on Render, MySQL on Aiven |
+
+## Run it on Windows
+
+You need MinGW-w64 g++ with C++20 support and MySQL Server 8.0 (8.0.16 or newer, for CHECK constraints).
+
+1. **Create the database** (this drops and recreates `ecommerce_db`, see `sql/README.md`). In Command Prompt:
+   ```
+   "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p --default-character-set=utf8mb4 < sql\ecommerce_db.sql
+   ```
+2. **Configure**: copy `db.conf.example` to `db.conf` and fill in your MySQL user and password. `db.conf` is git-ignored.
+3. **Build**: run `build.bat`. If MySQL is not in the default folder, first run `set MYSQL=<your mysql folder>`.
+4. **Run**: copy `libmysql.dll` from MySQL's `lib` folder next to `server.exe`, then start `server.exe` from the
+   project folder (it loads `templates/` and `public/` from there). Open http://localhost:8080.
+5. **Make yourself admin**: sign up on the site, then run
+   `UPDATE users SET role = 'ADMIN' WHERE email = '<your email>';` in MySQL.
+
+Stop the server with Ctrl+C; it finishes the requests in progress and flushes the request log first.
