@@ -6,6 +6,7 @@
 #include <fstream>
 #include <mutex>
 #include "common.h"
+#include "password_hash.h"   // hash_password / verify_password (PBKDF2): passwords ab plain text me save nahi hote
 using namespace std;
 
 const string HTML = "text/html; charset=utf-8";
@@ -711,9 +712,15 @@ static int signup_page(SOCKET client, const Request& req) {
     if (!errs.empty())
         return send_page(client, req, 400, "Sign up", signup_form(name, email, pw_problem ? &failed : nullptr), "", errors_flash(errs, pw_problem));
 
-    // password abhi plain text me hai (project ki known limitation; baad me hash karna hai)
+    // DB me sirf hash jaata hai (password_hash.h), typed password kabhi nahi. Hash na ban paaye to account hi nahi banate:
+    // plain text save karna "fallback" nahi ho sakta
+    const string hashed = hash_password(pass);
+    if (hashed.empty()) {
+        log_tag("PAGE", "signup: password hashing failed");
+        return error_page(client, req, 500, "Could not create account");
+    }
     int code = 0;
-    int n = db_exec("INSERT INTO users (name, email, password) VALUES (?, ?, ?)", {name, email, pass}, &code);
+    int n = db_exec("INSERT INTO users (name, email, password) VALUES (?, ?, ?)", {name, email, hashed}, &code);
     if (n < 0) {
         if (code == 1062)   // duplicate entry: email pehle se hai (UNIQUE)
             return send_page(client, req, 409, "Sign up", signup_form(name, email), "",
