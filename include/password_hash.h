@@ -1,28 +1,29 @@
-// password_hash.h - passwords ab plain text me nahi, PBKDF2-HMAC-SHA256 hash ban kar DB me jaate hain.
+// password_hash.h - passwords are no longer stored as plain text; the database keeps a PBKDF2-HMAC-SHA256 hash.
 //
-// DB me kya rehta hai (users.password, VARCHAR(255) me aaram se aata hai, ~120 characters):
+// What users.password holds (about 120 characters, fits easily in VARCHAR(255)):
 //     pbkdf2_sha256$<iterations>$<salt: 32 hex>$<hash: 64 hex>
-// - salt: har password ka apna 16 random bytes (secure_random). Do users ka same password ho to bhi hash alag,
-//   aur pehle se bani "rainbow table" kaam nahi aati.
-// - iterations: hash ko jaan-boojh kar dheema banata hai, taaki DB leak hone par har guess mehenga pade.
-//   Number hash ke andar likha hai, to baad me badhaya ja sakta hai: purane hash chalte rahenge, aur login par naye number
-//   se dobara ban jaayenge (password_needs_rehash).
-// - Purane users (jo hashing se pehle bane) ke paas plain text password hai. verify_password unhe bhi maanta hai,
-//   aur login hote hi pages.cpp unka password hash me badal deta hai. Is tarah koi migration script nahi chahiye.
+// - salt: 16 random bytes per password (secure_random). Two users with the same password still get different hashes,
+//   and precomputed "rainbow tables" do not help an attacker.
+// - iterations: makes hashing deliberately slow, so every guess is expensive if the database ever leaks.
+//   The number is stored inside the hash, so it can be raised later: old hashes keep working and are re-made
+//   with the new number at the user's next login (password_needs_rehash).
+// - Users created before hashing still have a plain text password. verify_password accepts those too, and pages.cpp
+//   replaces them with a hash right after a successful login, so no migration script is needed.
 //
-// Kyun PBKDF2: Windows (bcrypt.dll) aur Linux (OpenSSL) dono me pehle se hai, koi nayi library nahi chahiye.
-// (Argon2 / bcrypt behtar hain par unke liye libsodium jaisi nayi dependency lagti.)
+// Why PBKDF2: it is already available on Windows (bcrypt.dll) and Linux (OpenSSL), so no new library is needed.
+// (Argon2 or bcrypt would be stronger, but they need a new dependency such as libsodium.)
 #pragma once
 #include "platform.h"   // secure_random, pbkdf2_sha256
 #include <string>
 #include <vector>
 
 const char* const PW_HASH_PREFIX = "pbkdf2_sha256$";
-// OWASP 600,000 bolta hai, par Render free plan ka CPU bahut chhota hai (har login itna kaam karta hai, aur sirf 4 workers hain).
-// 100,000 = wahan bhi login lagbhag aadhe second ke andar. Hash me number likha hai, to baad me badhana aasaan hai.
+// OWASP recommends 600,000, but the Render free plan has a very small CPU share (every login does this work, and there are
+// only 4 workers). 100,000 keeps a login there under about half a second. The number is stored in each hash, so raising
+// it later is easy.
 const unsigned long PW_HASH_ITERATIONS = 100000;
 const int PW_SALT_BYTES = 16;
-const int PW_KEY_BYTES = 32;    // SHA-256 ka output size
+const int PW_KEY_BYTES = 32;    // SHA-256 output size
 
 inline std::string pw_to_hex(const unsigned char* b, size_t n) {
     static const char* digits = "0123456789abcdef";
@@ -40,7 +41,7 @@ inline bool pw_from_hex(const std::string& s, std::vector<unsigned char>& out) {
     auto val = [](char c) -> int {
         if (c >= '0' && c <= '9') return c - '0';
         if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        return -1;      // sirf chhote hex akshar: hum khud aise hi likhte hain
+        return -1;      // lowercase hex only: that is what we write ourselves
     };
     out.clear();
     for (size_t i = 0; i < s.size(); i += 2) {
@@ -51,8 +52,8 @@ inline bool pw_from_hex(const std::string& s, std::vector<unsigned char>& out) {
     return true;
 }
 
-// dono string barabar hain? Har byte dekhta hai chahe pehla hi alag ho, taaki "kitni der laga" se pata na chale
-// ki kitne shuru ke characters sahi the (timing attack)
+// Are the two strings equal? Looks at every byte even when the first one already differs, so the response time
+// does not reveal how many leading characters were right (timing attack).
 inline bool pw_equal(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) return false;
     unsigned char diff = 0;
@@ -62,7 +63,8 @@ inline bool pw_equal(const std::string& a, const std::string& b) {
 
 inline bool is_password_hash(const std::string& stored) { return stored.rfind(PW_HASH_PREFIX, 0) == 0; }
 
-// naya hash (signup, password badalna, purane plain text ko badalna). Error par "" (caller 500 dikhaye, kabhi plain text save na kare)
+// New hash (signup, password change, upgrading an old plain text password). Returns "" on error: the caller must show
+// an error and never save the plain text instead.
 inline std::string hash_password(const std::string& pw, unsigned long iterations = PW_HASH_ITERATIONS) {
     unsigned char salt[PW_SALT_BYTES];
     unsigned char key[PW_KEY_BYTES];
@@ -72,7 +74,7 @@ inline std::string hash_password(const std::string& pw, unsigned long iterations
            pw_to_hex(key, sizeof(key));
 }
 
-// hash ke hisse alag karo. Galat shakal = false
+// Splits a stored hash into its parts. Returns false if it is not in the expected format.
 inline bool pw_parse(const std::string& stored, unsigned long& iterations, std::vector<unsigned char>& salt, std::string& key_hex) {
     if (!is_password_hash(stored)) return false;
     size_t a = std::string(PW_HASH_PREFIX).size();
@@ -90,8 +92,8 @@ inline bool pw_parse(const std::string& stored, unsigned long& iterations, std::
     return pw_from_hex(key_hex, key) && key.size() == (size_t)PW_KEY_BYTES;
 }
 
-// typed password, DB wali value se milta hai? Hash ho to wahi salt + iterations se dobara hash karke milao.
-// Hash nahi (purana user) to plain text compare (capital/small ka farq, pehle ke BINARY compare jaisa).
+// Does the typed password match the stored value? For a hash: hash again with the same salt and iterations and compare.
+// For an old plain text value: compare directly (case-sensitive, like the old SQL BINARY compare).
 inline bool verify_password(const std::string& pw, const std::string& stored) {
     if (!is_password_hash(stored)) return !stored.empty() && pw_equal(pw, stored);
     unsigned long iterations = 0;
@@ -103,8 +105,8 @@ inline bool verify_password(const std::string& pw, const std::string& stored) {
     return pw_equal(pw_to_hex(key, sizeof(key)), key_hex);
 }
 
-// login sahi hone ke baad: kya is user ka password dobara (naye tareeke se) save karna chahiye?
-// Plain text ho, ya kam iterations wala purana hash ho, to haan
+// After a successful login: should this user's password be saved again in the current format?
+// Yes for plain text, and for a hash made with fewer iterations than PW_HASH_ITERATIONS.
 inline bool password_needs_rehash(const std::string& stored) {
     unsigned long iterations = 0;
     std::vector<unsigned char> salt;
