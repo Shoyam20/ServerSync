@@ -44,7 +44,8 @@ static void on_signal(int) {
 }
 #endif
 
-// Digits only, at most 9 (so it cannot overflow); false if invalid.
+// Text -> number for Content-Length. Digits only, at most 9 of them (so it cannot overflow); false if invalid.
+// We do not use atoi/stoi: they accept things like "12abc" or "-5", which must be a 400 here.
 static bool to_number(const string& s, size_t& num) {
     if (s.empty() || s.size() > 9) return false;
     num = 0;
@@ -55,11 +56,13 @@ static bool to_number(const string& s, size_t& num) {
     return true;
 }
 
+// Header names are case-insensitive in HTTP ("Content-Length" = "content-length"), so we store them in lowercase.
 static string to_lower(string s) {
     for (char& c : s) c = (char)tolower((unsigned char)c);
     return s;
 }
 
+// Removes spaces, tabs and line breaks at both ends (header values often have a space after the colon).
 string trim(const string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
     if (a == string::npos) return "";
@@ -67,6 +70,7 @@ string trim(const string& s) {
     return s.substr(a, b - a + 1);
 }
 
+// One hex digit (0-9, a-f, A-F) -> its value 0..15, or -1 if it is not a hex digit. Used by url_decode for %xx.
 static int hex_value(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -99,7 +103,8 @@ static bool url_decode(const string& in, string& out) {
     return true;
 }
 
-// Splits a=1&b=2 into a map; names and values are URL-decoded.
+// Splits a=1&b=2 into a map; names and values are URL-decoded. Used for the query string and for POST form bodies.
+// A broken %xx anywhere makes the whole request a 400 (better than guessing what the user meant).
 static bool parse_query(const string& query, map<string, string>& params) {
     size_t pos = 0;
     while (pos < query.size()) {
@@ -146,7 +151,8 @@ static bool parse_request_line(const string& line, Request& req)
     return true;
 }
 
-// Splits "a=1; session_id=xyz" into a map.
+// Splits the Cookie header "a=1; session_id=xyz" into a map. Cookies without a name are skipped.
+// Only session_id is used by the shop (pages.cpp reads it to find the logged-in user).
 static void parse_cookies(const string& header, map<string, string>& cookies) {
     size_t pos = 0;
     while (pos < header.size()) {
@@ -161,7 +167,8 @@ static void parse_cookies(const string& header, map<string, string>& cookies) {
     }
 }
 
-// head = request line + headers, without the final blank line.
+// head = request line + headers, without the final blank line. Every header line must be "Name: value";
+// anything else (no colon, space inside the name) is a 400.
 static bool parse_request(const string& head, Request& req) {
     size_t eol = head.find("\r\n");
     if (eol == string::npos) eol = head.size();
@@ -242,6 +249,7 @@ static int read_request(SOCKET client, Request& req) {
     return READ_OK;
 }
 
+// The text after the status code in the first response line, e.g. "404 Not Found".
 static string reason(int status) {
     if (status == 200) return "OK";
     if (status == 302) return "Found";
