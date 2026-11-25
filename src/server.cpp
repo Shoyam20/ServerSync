@@ -393,6 +393,18 @@ static int serve_static(SOCKET client, const Request& req) {
     return 200;
 }
 
+// Closes a client socket without losing the answer we just sent.
+// Closing a socket that still has unread data makes the OS (Windows and Linux) send RST instead of FIN, and the client
+// can lose the response. So: send FIN first, read and throw away what the client still sends (100 ms timeout, at most
+// 16 reads so a client that keeps sending cannot hold the thread), then close.
+static void close_gracefully(SOCKET client) {
+    shutdown(client, SHUT_SEND);
+    set_recv_timeout(client, 100);
+    char buf[4096];
+    for (int i = 0; i < 16 && recv(client, buf, sizeof(buf), 0) > 0; i++) {}
+    close_socket(client);
+}
+
 // Handles one client: read, route, close. Runs on a worker thread, never on the main thread.
 // Returns what was answered (for the worker's log and metrics).
 // Per-request console lines only print when VERBOSE_LOG = 1.
@@ -428,7 +440,9 @@ RequestInfo handle_client(const ClientJob& job) {
     } else {
         log_msg_verbose("client left early");   // Client left: nothing to send (status 0 = not logged).
     }
-    close_socket(client);
+    // After an error answer part of the request may still be unread (e.g. a 431 for huge headers): close gracefully.
+    if (r > 0) close_gracefully(client);
+    else close_socket(client);
     return info;
 }
 
@@ -497,13 +511,8 @@ static void reject_client(SOCKET client) {
     send_response(client, 503, "text/html; charset=utf-8", render_error_page("Server busy, try again"),
                   "Retry-After: 2\r\n");
 
-    // Closing with unread data makes the OS (Windows and Linux) send RST, and the client may lose the 503.
-    // So send FIN first, read the request briefly (max 100 ms), then close.
-    shutdown(client, SHUT_SEND);
-    set_recv_timeout(client, 100);
-    char buf[4096];
-    recv(client, buf, sizeof(buf), 0);
-    close_socket(client);
+    // The request was never read, so close gracefully (see close_gracefully) or the client may lose the 503.
+    close_gracefully(client);
 }
 
 // The accept loop, on the main thread. It only accepts and queues; the worker threads do the reading and answering,
