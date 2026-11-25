@@ -25,12 +25,15 @@ jobs:
         run: |
           $dir = "C:\Program Files\MySQL\MySQL Server 8.0"
           if (-not (Test-Path "$dir\bin\mysqld.exe") -or -not (Test-Path "$dir\lib\libmysql.lib")) {
+            # downloads.mysql.com shows a "Technical Difficulties" page to bots, cdn.mysql.com gives the file directly
             $v = "8.0.40"
             Write-Host "downloading mysql $v"
-            Invoke-WebRequest "https://downloads.mysql.com/archives/get/p/23/file/mysql-$v-winx64.zip" -OutFile "$env:RUNNER_TEMP\mysql.zip"
+            curl.exe -fsSL -o "$env:RUNNER_TEMP\mysql.zip" "https://cdn.mysql.com/archives/mysql-8.0/mysql-$v-winx64.zip"
+            if ($LASTEXITCODE -ne 0) { throw "mysql download failed" }
             Expand-Archive "$env:RUNNER_TEMP\mysql.zip" -DestinationPath "C:\mysql"
             $dir = "C:\mysql\mysql-$v-winx64"
           }
+          Get-ChildItem "$dir\lib" -Filter "libmysql*" | ForEach-Object { Write-Host $_.Name }
           Write-Host "using mysql in $dir"
           "MYSQL_DIR=$dir" >> $env:GITHUB_ENV
           "MYSQL=$dir" >> $env:GITHUB_ENV
